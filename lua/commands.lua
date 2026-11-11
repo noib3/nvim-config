@@ -40,3 +40,20 @@ end, {
 vim.cmd([[
   cnoreabbrev <expr> qa getcmdtype() ==# ':' && getcmdline() ==# 'qa' && v:char ==# "\r" ? 'Qall' : 'qa'
 ]])
+
+-- `:restart` starts the new Nvim with this one's environment, so later
+-- restarts keep the configuration.
+vim.api.nvim_create_user_command("Dev", function(opts)
+  local dir = opts.args ~= "" and vim.fs.abspath(vim.fn.expand(opts.args))
+    or nil
+  if dir and vim.fn.filereadable(dir .. "/init.lua") == 0 then
+    vim.notify(("%s has no init.lua"):format(dir), vim.log.levels.ERROR)
+    return
+  end
+  vim.env.NVIM_CONFIG_DEV = dir
+  vim.cmd.restart()
+end, {
+  nargs = "?",
+  complete = "dir",
+  desc = "Restarts Nvim with the configuration of a checkout of nvim-config, or the installed one without a directory",
+})

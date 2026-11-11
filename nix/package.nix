@@ -130,30 +130,48 @@ let
   ++ treeSitterParsers
   ++ treeSitterQueries;
 
-  # A directory with all the plugins as start packages.
-  packDir = linkFarm "nvim-pack" (
-    builtins.map (
-      plugin:
-      let
-        name = builtins.baseNameOf (builtins.unsafeDiscardStringContext plugin);
-      in
-      {
-        name = "pack/noib3/start/${name}";
-        path = plugin;
-      }
-    ) (plugins ++ localPlugins)
-  );
+  # Returns a directory with the given plugins as start packages.
+  mkPackDir =
+    packName: plugins:
+    linkFarm packName (
+      builtins.map (
+        plugin:
+        let
+          name = builtins.baseNameOf (builtins.unsafeDiscardStringContext plugin);
+        in
+        {
+          name = "pack/noib3/start/${name}";
+          path = plugin;
+        }
+      ) plugins
+    );
 
-  # An init file that replaces the user's configuration directory in the
-  # runtime path with this repo's, adds the plugins to the package
-  # path, then sources the configuration's `init.lua`.
+  # An init file that replaces the user's configuration directory in the runtime
+  # path with this repo's, adds the plugins to the package path, then sources
+  # the configuration's `init.lua`. With `$NVIM_CONFIG_DEV` set to a checkout of
+  # this repo, the configuration and the local plugins are the checkout's
+  # instead of the store's.
   init = writeText "init.lua" ''
     local user = vim.fn.stdpath("config")
     vim.opt.runtimepath:remove({ user, user .. "/after" })
-    vim.opt.runtimepath:prepend("${config}")
-    vim.opt.runtimepath:append("${config}/after")
-    vim.opt.packpath:prepend("${packDir}")
-    dofile("${config}/init.lua")
+    vim.opt.packpath:prepend("${mkPackDir "nvim-pack" plugins}")
+
+    local config = "${config}"
+    local dev = vim.env.NVIM_CONFIG_DEV
+    if dev and dev ~= "" then
+      config = vim.fs.abspath(dev)
+      for name, type in vim.fs.dir(config .. "/plugins") do
+        if type == "directory" then
+          vim.opt.runtimepath:prepend(config .. "/plugins/" .. name)
+        end
+      end
+    else
+      vim.opt.packpath:prepend("${mkPackDir "nvim-local-pack" localPlugins}")
+    end
+
+    vim.opt.runtimepath:prepend(config)
+    vim.opt.runtimepath:append(config .. "/after")
+    dofile(config .. "/init.lua")
   '';
 
   # Merges the plugins' `lua` directories into a single tree, used by EmmyLua

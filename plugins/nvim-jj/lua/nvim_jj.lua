@@ -1827,8 +1827,7 @@ local log_buffer = function(root)
 end
 
 --- Closes the windows of the current tab page showing the log of a jj
---- workspace, or else opens one in a split below the current window. The
---- window opens with all autocommands ignored.
+--- workspace, or else opens one in a split below the current window.
 ---@param path? string A path in the workspace, by default the current file or the working directory.
 ---@return integer? win The window opened.
 M.toggle = function(path)
@@ -1851,14 +1850,11 @@ M.toggle = function(path)
   end
 
   local bufnr = log_buffer(root)
-  ---@type integer
-  local win
-  without_autocmds(function()
-    vim.cmd(("belowright %dsplit"):format(config.height))
-    win = vim.api.nvim_get_current_win()
-    vim.api.nvim_win_set_buf(win, bufnr)
-    vim.wo[win].winfixheight = true
-  end)
+  local win = vim.api.nvim_open_win(bufnr, true, {
+    split = "below",
+    height = config.height,
+  })
+  vim.wo[win].winfixheight = true
   return win
 end
 

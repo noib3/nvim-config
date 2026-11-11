@@ -108,4 +108,7 @@ in
     buildInputs = (oa.buildInputs or [ ]) ++ [
       ghostty-vt
     ];
+    patches = (oa.patches or [ ]) ++ [
+      ./patches/neovim-hsep-on-close.patch
+    ];
   })

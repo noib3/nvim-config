@@ -18,17 +18,12 @@ local set_window_options = function(win)
   )
 end
 
-vim.keymap.set("n", "jj", function()
-  local win = jj.toggle()
-  if not win then return end
-  set_window_options(win)
-  -- The window opened without autocommands, so the statusline hasn't drawn
-  -- the separator above it yet.
-  vim.api.nvim_exec_autocmds("WinNew", {
-    group = "noib3/lualine-statusline",
-    modeline = false,
-  })
-end, { desc = "Toggle the jj log of the current workspace" })
+vim.keymap.set(
+  "n",
+  "jj",
+  function() jj.toggle() end,
+  { desc = "Toggle the jj log of the current workspace" }
+)
 
 --- Returns the lines of the visual selection, or the cursor's line outside
 --- of visual mode, and leaves visual mode.
