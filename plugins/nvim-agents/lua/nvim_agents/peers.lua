@@ -69,8 +69,11 @@ local ask = function(address, code, args, timeout_ms, callback)
       if read_err or not data then return finish(false) end
       buffer = buffer .. data
       local ok, response, position = pcall(unpack, buffer)
-      if not ok or response == nil then return end
+      if not ok then return finish(false) end
+      -- The unpacker keeps the bytes it read of an incomplete response, and
+      -- continues from them with the next ones.
       buffer = buffer:sub(position or #buffer + 1)
+      if response == nil then return end
       if
         type(response) == "table"
         and response[1] == 1

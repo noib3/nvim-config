@@ -15,7 +15,9 @@
   "workspace": {
     "ignoreDir": [
       ".git",
-      ".jj"
+      ".jj",
+      "plugins",
+      "tests"
     ],
     "library": [
       "$VIMRUNTIME/lua",

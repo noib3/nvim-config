@@ -73,6 +73,19 @@ let
     '';
   };
 
+  # The configuration's files.
+  config = lib.fileset.toSource {
+    root = ../.;
+    fileset = lib.fileset.unions [
+      ../.emmyrc.json
+      ../after
+      ../filetype.lua
+      ../init.lua
+      ../lsp
+      ../lua
+    ];
+  };
+
   localPlugins = lib.mapAttrsToList (name: _: ../plugins + "/${name}") (
     builtins.readDir ../plugins
   );
@@ -132,15 +145,15 @@ let
   );
 
   # An init file that replaces the user's configuration directory in the
-  # runtime path with the one in this repo, adds the plugins to the package
+  # runtime path with this repo's, adds the plugins to the package
   # path, then sources the configuration's `init.lua`.
   init = writeText "init.lua" ''
     local user = vim.fn.stdpath("config")
     vim.opt.runtimepath:remove({ user, user .. "/after" })
-    vim.opt.runtimepath:prepend("${../config}")
-    vim.opt.runtimepath:append("${../config}/after")
+    vim.opt.runtimepath:prepend("${config}")
+    vim.opt.runtimepath:append("${config}/after")
     vim.opt.packpath:prepend("${packDir}")
-    dofile("${../config}/init.lua")
+    dofile("${config}/init.lua")
   '';
 
   # Merges the plugins' `lua` directories into a single tree, used by EmmyLua
@@ -164,13 +177,13 @@ let
     NVIM_PLUGINS_LUA = mergeLua "nvim-plugins-lua" (plugins ++ localPlugins);
   };
 
-  neovim = import ./neovim.nix {
+  unwrapped = import ./neovim-unwrapped.nix {
     inherit inputs lib pkgs;
   };
 in
 pkgs.symlinkJoin {
   name = "nvim";
-  paths = [ neovim ];
+  paths = [ unwrapped ];
   nativeBuildInputs = [ pkgs.makeWrapper ];
 
   postBuild =
@@ -191,7 +204,7 @@ pkgs.symlinkJoin {
     '';
 
   passthru = {
-    inherit env neovim;
+    inherit config env unwrapped;
     # The `lua` directories of the plugins that aren't in this repo, merged
     # into a single tree.
     thirdPartyLua = mergeLua "nvim-third-party-lua" plugins;

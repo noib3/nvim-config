@@ -209,10 +209,10 @@
         };
     in
     {
-      homeManagerModules.default = import ./module.nix { inherit inputs mkPkgs; };
+      homeManagerModules.default = import ./nix/module.nix { inherit inputs mkPkgs; };
 
       packages = eachSystem (pkgs: {
-        default = pkgs.callPackage ./package { inherit inputs; };
+        default = pkgs.callPackage ./nix/package.nix { inherit inputs; };
       });
 
       checks = eachSystem (
@@ -255,10 +255,10 @@
             pkgs.runCommand "check-config"
               {
                 env.NVIM_PLUGINS_LUA = nvim.env.NVIM_PLUGINS_LUA;
-                env.VIMRUNTIME = "${nvim.neovim}/share/nvim/runtime";
+                env.VIMRUNTIME = "${nvim.unwrapped}/share/nvim/runtime";
               }
               ''
-                ${emmylua_check} --warnings-as-errors ${./config} 2>&1 | tee "$out"
+                ${emmylua_check} --warnings-as-errors ${nvim.config} 2>&1 | tee "$out"
                 ${emmylua_check} --warnings-as-errors --config ${pluginsConfig} ${./plugins} \
                   2>&1 | tee -a "$out"
               '';
@@ -404,7 +404,7 @@
                 # Each file gets its own temporary directory.
                 mkdir "$tmp/$i"
                 TEST_FILE="''${tests[$i]}" HOME="$tmp/$i" TMPDIR="$tmp/$i" \
-                  ${nvim.neovim}/bin/nvim --headless --clean -n -i NONE \
+                  ${nvim.unwrapped}/bin/nvim --headless --clean -n -i NONE \
                   --cmd "set rtp^=${rtp}" \
                   -c "luafile ${./tests/run.lua}" >"$tmp/$i.out" 2>&1 &
                 pids+=("$!")

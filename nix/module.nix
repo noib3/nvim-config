@@ -12,7 +12,7 @@ let
   cfg = config.neovim;
   pkgsForNeovim = mkPkgs { inherit (pkgs.stdenv.hostPlatform) system; };
   claudeCode = config.programs.claude-code;
-  nvim-agents-lua = ./plugins/nvim-agents/lua;
+  nvim-agents-lua = ../plugins/nvim-agents/lua;
 
   refresh-nvim-hunks = pkgs.writeShellApplication {
     name = "refresh-nvim-hunks";
@@ -37,7 +37,7 @@ let
         [
           "${lib.getExe cfg.package} --clean -l ${nvim-agents-lua}/nvim_agents/mcp/state.lua"
         ]
-        (builtins.readFile ./claude-code/nvim-agents-hook.sh);
+        (builtins.readFile ../plugins/nvim-agents/hooks/claude-code.sh);
   };
 
   nvim-agents-mcp = pkgs.writeShellApplication {
@@ -63,7 +63,7 @@ in
       type = types.package;
       description = "The fully configured Neovim package";
       readOnly = true;
-      default = pkgsForNeovim.callPackage ./package { inherit inputs; };
+      default = pkgsForNeovim.callPackage ./package.nix { inherit inputs; };
     };
 
     enableClaudeCodeIntegration = mkOption {
