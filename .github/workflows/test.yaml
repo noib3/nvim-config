@@ -1,0 +1,28 @@
+name: test
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  plugins:
+    name: plugins
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install Nix
+        uses: NixOS/nix-installer-action@main
+        with:
+          extra-conf: |
+            accept-flake-config = true
+      - name: Setup Nix cache
+        uses: sub60/setup-cache@main
+      - name: Test the plugins
+        run: nix run .#tests.x86_64-linux.plugins

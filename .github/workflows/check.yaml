@@ -1,0 +1,67 @@
+name: check
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  config:
+    name: config
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install Nix
+        uses: NixOS/nix-installer-action@main
+        with:
+          extra-conf: |
+            accept-flake-config = true
+      - name: Setup Nix cache
+        uses: sub60/setup-cache@main
+      - name: Check the config
+        run: nix run .#check-config
+
+  formatting:
+    name: formatting
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install Nix
+        uses: NixOS/nix-installer-action@main
+        with:
+          extra-conf: |
+            accept-flake-config = true
+      - name: Check formatting
+        run: nix run .#check-formatting
+
+  nix-lints:
+    name: Nix lints
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install Nix
+        uses: NixOS/nix-installer-action@main
+        with:
+          extra-conf: |
+            accept-flake-config = true
+      - name: Run Nix linter on all .nix files
+        run: nix run .#check-nix-lints
+
+  shell-lints:
+    name: shell lints
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - name: Install Nix
+        uses: NixOS/nix-installer-action@main
+        with:
+          extra-conf: |
+            accept-flake-config = true
+      - name: Run ShellCheck on all .sh files
+        run: nix run .#check-shell-lints
