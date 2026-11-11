@@ -78,6 +78,12 @@ local overrides = {
       -- Threads.
       ThreadsNormal = { fg = "#d4be98", bg = "#32302f" },
       ThreadsChevron = { fg = "#ddc7a1" },
+
+      -- Trouble.
+      TroubleNormal = { link = "Normal" },
+      TroubleNormalNC = { link = "Normal" },
+      TroubleDirectory = { fg = "#7daea3" },
+      TroubleFilename = { fg = "#a89984" },
     },
   },
   light = {
@@ -174,6 +180,12 @@ local overrides = {
       -- Threads.
       ThreadsNormal = { fg = "#42423c", bg = "#e6d5ae" },
       ThreadsChevron = { fg = "#42423c" },
+
+      -- Trouble.
+      TroubleNormal = { link = "Normal" },
+      TroubleNormalNC = { link = "Normal" },
+      TroubleDirectory = { fg = "#45707a" },
+      TroubleFilename = { fg = "#7c6f64" },
     },
   },
 }

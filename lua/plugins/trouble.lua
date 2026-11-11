@@ -1,7 +1,3 @@
-local utils = require("utils")
-
-local home = assert(vim.env.HOME)
-
 -- trouble's module is a metatable that forwards to `trouble.api`, which EmmyLua
 -- can't see through.
 local trouble = require("trouble")
@@ -82,8 +78,26 @@ local fold_or_jump = {
   desc = "Show or hide the nested rows, or else jump to the item",
 }
 
+--- Returns the root of the innermost jj or Git repo containing the path.
+---@param path string
+---@return string?
+local repo_root = function(path) return vim.fs.root(path, { { ".jj", ".git" } }) end
+
 ---@diagnostic disable-next-line: undefined-field
 trouble.setup({
+  formatters = {
+    -- The file's path relative to the root of its jj or Git repo, or else its
+    -- full path with the home directory as `~`.
+    repo_path = function(ctx)
+      local filename = ctx.item.filename
+      local root = repo_root(filename)
+      return {
+        text = root and vim.fs.relpath(root, filename)
+          or vim.fn.fnamemodify(filename, ":~"),
+        hl = "TroubleFilename",
+      }
+    end,
+  },
   icons = {
     indent = {
       fold_open = "▾ ",
@@ -119,12 +133,13 @@ trouble.setup({
     errors_and_warnings = {
       max_items = false,
       mode = "diagnostics",
+      source = "repo_diagnostics",
+      groups = {
+        { "filename", format = "{file_icon} {repo_path} {count}" },
+      },
       filter = function(items)
         return vim.tbl_filter(
-          function(item)
-            return item.severity <= vim.diagnostic.severity.WARN
-              and utils.lua.starts_with(item.filename, home)
-          end,
+          function(item) return item.severity <= vim.diagnostic.severity.WARN end,
           items
         )
       end,
@@ -136,4 +151,29 @@ trouble.setup({
       },
     },
   },
+})
+
+-- The diagnostics of the files of the current buffer's repo, or of that file
+-- alone outside a repo.
+require("trouble.sources").register("repo_diagnostics", {
+  get = function(cb, ctx)
+    local buf = ctx.main.buf --[[@as integer]]
+    local win = ctx.main.win --[[@as integer]]
+    local file = vim.fs.normalize(vim.api.nvim_buf_get_name(buf))
+    local is_file = file ~= "" and vim.bo[buf].buftype == ""
+    local root = repo_root(is_file and file or vim.fn.getcwd(win))
+    ---@type table<string, string|false>
+    local roots = {}
+    local get_diagnostics = require("trouble.sources").get("diagnostics") --[[@as trouble.Source.get]]
+    get_diagnostics(function(items)
+      cb(vim.tbl_filter(function(item)
+        if not root then return item.filename == file end
+        local filename = item.filename
+        if roots[filename] == nil then
+          roots[filename] = repo_root(filename) or false
+        end
+        return roots[filename] == root
+      end, items))
+    end, ctx)
+  end,
 })
