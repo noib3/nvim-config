@@ -3119,8 +3119,6 @@ local set_highlights = function()
     JjBookmark = { link = "Constant" },
     JjChangeId = { fg = foreground("Identifier"), bold = true },
     JjChangeIdRest = { fg = comment },
-    JjCode = { link = "String" },
-    JjCodeDelimiter = { fg = comment },
     JjConflict = { link = "DiagnosticError" },
     JjCopy = { link = "DiffAdd" },
     JjCut = { link = "DiffDelete" },
@@ -3141,66 +3139,79 @@ local set_highlights = function()
   end
 end
 
---- Returns the spans of a subject in backticks, as the 0-based columns of
---- their opening and closing backticks.
-local code_spans = change.code_spans
+--- Returns the inline markdown of a line of text.
+local markup = change.markup
 
---- Returns the index of the code span a window's cursor is in, if any. The
---- span's backticks count as in it.
+--- Returns whether a column is in a span of columns.
+---@param col integer
+---@param span [integer, integer] The columns the span starts at and ends before.
+---@return boolean
+local in_span = function(col, span) return col >= span[1] and col < span[2] end
+
+--- Returns the cursor's 0-based line and column in a window, and the spans
+--- of markup of its line that the cursor is in, as their columns joined by
+--- commas.
 ---@param win integer
 ---@param bufnr integer
----@return integer? row The cursor's 0-based line.
----@return integer? index
-local cursor_span = function(win, bufnr)
+---@return integer row
+---@return integer col
+---@return string spans Empty if the cursor isn't in any span.
+local cursor_markup = function(win, bufnr)
   local row, col = unpack(vim.api.nvim_win_get_cursor(win))
   local text = vim.api.nvim_buf_get_lines(bufnr, row - 1, row, false)[1] or ""
-  for index, span in ipairs(code_spans(text)) do
-    if col >= span[1] and col <= span[2] then return row - 1, index end
+  local spans = {}
+  for _, conceal in ipairs(markup(text).conceals) do
+    local span = conceal.span
+    local key = ("%d-%d"):format(span[1], span[2])
+    if in_span(col, span) and not vim.list_contains(spans, key) then
+      spans[#spans + 1] = key
+    end
   end
-  return row - 1, nil
+  return row - 1, col, table.concat(spans, ",")
 end
 
---- Highlights the code in a line of a log buffer drawn in a window, and
---- conceals its backticks, except the ones around the window's cursor.
+--- Highlights the markdown in a line of a buffer drawn in a window, and
+--- conceals its markup, except the one of the spans the window's cursor is
+--- in.
 ---@param win integer
 ---@param bufnr integer
 ---@param row integer The 0-based line.
-local draw_code = function(win, bufnr, row)
+local draw_markup = function(win, bufnr, row)
   local text = vim.api.nvim_buf_get_lines(bufnr, row, row + 1, false)[1] or ""
-  local cursor_row, cursor_index = cursor_span(win, bufnr)
-  for index, span in ipairs(code_spans(text)) do
-    local open, close = span[1], span[2]
-    vim.api.nvim_buf_set_extmark(bufnr, code_namespace, row, open + 1, {
-      end_col = close,
-      hl_group = "JjCode",
+  local cursor_row, cursor_col = cursor_markup(win, bufnr)
+  local line_markup = markup(text)
+  for _, highlight in ipairs(line_markup.highlights) do
+    vim.api.nvim_buf_set_extmark(bufnr, code_namespace, row, highlight.start, {
+      end_col = highlight.finish,
+      hl_group = highlight.hl_group,
       ephemeral = true,
     })
-    local revealed = row == cursor_row and index == cursor_index
-    for _, col in ipairs({ open, close }) do
-      vim.api.nvim_buf_set_extmark(bufnr, code_namespace, row, col, {
-        end_col = col + 1,
-        hl_group = "JjCodeDelimiter",
-        conceal = not revealed and "" or nil,
+  end
+  for _, conceal in ipairs(line_markup.conceals) do
+    if not (row == cursor_row and in_span(cursor_col, conceal.span)) then
+      vim.api.nvim_buf_set_extmark(bufnr, code_namespace, row, conceal.start, {
+        end_col = conceal.finish,
+        conceal = conceal.text,
         ephemeral = true,
       })
     end
   end
 end
 
---- The code span each window's cursor was last in, as its 0-based line and
---- index, keyed by window.
----@type table<integer, [integer, integer?]?>
+--- The spans of markup each window's cursor was last in, as its 0-based
+--- line and the spans' columns joined by commas, keyed by window.
+---@type table<integer, [integer, string]?>
 local cursor_spans = {}
 
---- Redraws the lines of a window whose code spans revealed by the cursor
---- changed since the cursor last moved.
+--- Redraws the lines of a window whose spans of markup revealed by the
+--- cursor changed since the cursor last moved.
 ---@param win integer
 ---@param bufnr integer
 local redraw_cursor_spans = function(win, bufnr)
-  local row, index = cursor_span(win, bufnr)
+  local row, _, indices = cursor_markup(win, bufnr)
   local previous = cursor_spans[win]
-  cursor_spans[win] = { assert(row), index }
-  if previous and previous[1] == row and previous[2] == index then return end
+  cursor_spans[win] = { row, indices }
+  if previous and previous[1] == row and previous[2] == indices then return end
   ---@param line integer
   local redraw = function(line)
     vim.api.nvim__redraw({
@@ -3209,9 +3220,8 @@ local redraw_cursor_spans = function(win, bufnr)
       flush = false,
     })
   end
-  local previous_row = previous and previous[1]
-  if previous_row then redraw(previous_row) end
-  if index then redraw(assert(row)) end
+  if previous then redraw(previous[1]) end
+  if indices ~= "" then redraw(row) end
 end
 
 ---@param opts? { gh?: string, height?: integer, lookahead?: integer, remote?: string, revset?: string }
@@ -3226,9 +3236,10 @@ M.setup = function(opts)
     on_win = function(_, _, bufnr)
       return logs[bufnr] ~= nil or change.is_view(bufnr)
     end,
-    -- A change's view only has code in its subject.
     on_line = function(_, win, bufnr, row)
-      if row == 0 or logs[bufnr] then draw_code(win, bufnr, row) end
+      if logs[bufnr] or change.is_description_row(bufnr, row) then
+        draw_markup(win, bufnr, row)
+      end
     end,
   })
 

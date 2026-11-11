@@ -38,33 +38,21 @@ end
 ---@return integer
 local first_line = function(hunk) return math.max(hunk.new_start, 1) end
 
---- Returns the distinct files of a node's items.
----@param node trouble.Node
----@return nvim_hunks.File[]
-local files_of = function(node)
-  local files, seen = {}, {}
-  for _, item in ipairs(node:flatten()) do
-    local file = item.item.file
-    if file and not seen[file] then
-      seen[file] = true
-      files[#files + 1] = file
-    end
-  end
-  return files
-end
+--- The addition of files, with its letter and the highlight of its number.
+local added_status = { "added", "A", "HunksAddedFiles" }
 
 --- The changes to files in the order they're summarized, with their letters
 --- and the highlights of their numbers.
 local statuses = {
-  { "modified", "m", "HunksModifiedFiles" },
-  { "added", "a", "HunksAddedFiles" },
-  { "removed", "d", "HunksDeletedFiles" },
-  { "renamed", "r", "HunksRenamedFiles" },
-  { "copied", "c", "HunksRenamedFiles" },
+  added_status,
+  { "removed", "D", "HunksDeletedFiles" },
+  { "modified", "M", "HunksModifiedFiles" },
+  { "renamed", "R", "HunksRenamedFiles" },
+  { "copied", "C", "HunksRenamedFiles" },
 }
 
---- Returns the segments summarizing a set of files, like `3m 1a 1d (+20 -4)`:
---- how many were modified, added, deleted, renamed and copied, and the lines
+--- Returns the segments summarizing a set of files, like `1A, 2M, +20 -4`:
+--- how many were added, deleted, modified, renamed and copied, and the lines
 --- added and deleted.
 ---@param files nvim_hunks.File[]
 ---@return trouble.Format[]
@@ -81,20 +69,107 @@ local summary = function(files)
   for _, status in ipairs(statuses) do
     local count = counts_by_status[status[1]]
     if count then
-      segments[#segments + 1] = { text = " " .. count, hl = status[3] }
-      segments[#segments + 1] = { text = status[2] }
+      if #segments > 0 then segments[#segments + 1] = { text = ", " } end
+      segments[#segments + 1] = { text = count .. status[2], hl = status[3] }
     end
   end
 
   local lines = counts(all)
   if #lines > 0 then
     -- The counts of lines start with a space.
-    lines[1].text = lines[1].text:sub(2)
-    segments[#segments + 1] = { text = " (" }
+    if #segments == 0 then lines[1].text = lines[1].text:sub(2) end
+    if #segments > 0 then segments[#segments + 1] = { text = "," } end
     vim.list_extend(segments, lines)
-    segments[#segments + 1] = { text = ")" }
   end
   return segments
+end
+
+---@class nvim_hunks.trouble.Segment
+---@field text string
+---@field hl? string|string[]
+
+--- The captures of the highlights query that aren't highlights.
+local unhighlighted_captures = { conceal = true, nospell = true, spell = true }
+
+--- Returns the segments of a subject shortened to a width, with its inline
+--- markdown highlighted and concealed like Neovim's highlights query does.
+---@param subject string
+---@param max_width integer
+---@return nvim_hunks.trouble.Segment[]
+local subject_segments = function(subject, max_width)
+  -- The concealed bytes, the texts shown instead from their first bytes on,
+  -- and the highlights of each byte.
+  ---@type table<integer, true?>, table<integer, string?>, table<integer, string[]?>
+  local hidden, replacements, highlights = {}, {}, {}
+  local ok, parser =
+    pcall(vim.treesitter.get_string_parser, subject, "markdown_inline")
+  local query = ok and vim.treesitter.query.get("markdown_inline", "highlights")
+  if ok and query then
+    local root = parser:parse()[1]:root()
+    for id, node, metadata in query:iter_captures(root, subject) do
+      local name = assert(query.captures[id])
+      local range = vim.treesitter.get_range(node, subject, metadata[id])
+      local start, finish = range[3], range[6]
+      local conceal = metadata.conceal or (metadata[id] or {}).conceal
+      local hl_group = not name:match("^_")
+        and not unhighlighted_captures[name]
+        and ("@%s.markdown_inline"):format(name)
+      for byte = start + 1, finish do
+        if type(conceal) == "string" then hidden[byte] = true end
+        if hl_group then
+          local groups = highlights[byte] or {}
+          groups[#groups + 1] = hl_group
+          highlights[byte] = groups
+        end
+      end
+      if type(conceal) == "string" and conceal ~= "" then
+        replacements[start + 1] = conceal
+      end
+    end
+  end
+
+  ---@param byte integer
+  ---@return string
+  local key_of = function(byte) return table.concat(highlights[byte] or {}, ",") end
+
+  ---@type nvim_hunks.trouble.Segment[]
+  local segments = {}
+  local byte = 1
+  while byte <= #subject do
+    if hidden[byte] then
+      local replacement = replacements[byte]
+      if replacement then
+        segments[#segments + 1] = { text = replacement, hl = highlights[byte] }
+      end
+      byte = byte + 1
+    else
+      local first, key = byte, key_of(byte)
+      while byte <= #subject and not hidden[byte] and key_of(byte) == key do
+        byte = byte + 1
+      end
+      segments[#segments + 1] = {
+        text = subject:sub(first, byte - 1),
+        hl = highlights[first],
+      }
+    end
+  end
+
+  ---@type nvim_hunks.trouble.Segment[]
+  local shortened, width = {}, 0
+  for _, segment in ipairs(segments) do
+    local segment_width = vim.api.nvim_strwidth(segment.text)
+    if width + segment_width > max_width then
+      local kept = math.max(max_width - width - 1, 0)
+      shortened[#shortened + 1] = {
+        text = vim.fn.strcharpart(segment.text, 0, kept) .. "…",
+        hl = segment.hl,
+      }
+      return shortened
+    end
+    width = width + segment_width
+    shortened[#shortened + 1] = segment
+  end
+  return shortened
 end
 
 --- The files of the last listing.
@@ -113,53 +188,39 @@ local recaps = {}
 local recap_namespace = vim.api.nvim_create_namespace("nvim-hunks-recap")
 
 --- Returns the lines of the recap of the listed files, each as its segments:
---- the working-copy commit's IDs and bookmarks, the counts of changed files
---- and lines, and the commit's description, shortened to the given width.
+--- the working-copy commit's subject, shortened to the given width, its IDs
+--- and bookmarks, and the counts of changed files and lines.
 ---@param max_width integer
----@return trouble.Format[][]
+---@return nvim_hunks.trouble.Segment[][]
 local recap_lines = function(max_width)
   local lines = {}
 
   if working_copy then
+    local subject = working_copy.description
+    lines[#lines + 1] = subject ~= "" and subject_segments(subject, max_width)
+      or { { text = "(no description set)", hl = "Comment" } }
+
     local change_id, commit_id = working_copy.change_id, working_copy.commit_id
     local ids = {
-      { text = change_id.prefix, hl = "Special" },
-      { text = change_id.rest, hl = "Comment" },
-      { text = " " },
-      { text = commit_id.prefix, hl = "Identifier" },
-      { text = commit_id.rest, hl = "Comment" },
+      { text = change_id.prefix, hl = "HunksChangeId" },
+      { text = change_id.rest .. " ", hl = "HunksChangeIdRest" },
+      { text = commit_id.prefix .. commit_id.rest, hl = "HunksChangeIdRest" },
     }
     for _, bookmark in ipairs(working_copy.bookmarks) do
-      ids[#ids + 1] = { text = " " .. bookmark, hl = "Function" }
+      ids[#ids + 1] = { text = " " }
+      ids[#ids + 1] = { text = bookmark, hl = "HunksBookmark" }
     end
     lines[#lines + 1] = ids
   end
 
-  if #listed > 0 then
-    local summarized = summary(listed)
-    -- The summary starts with a space.
-    local first = summarized[1]
-    if first then first.text = first.text:sub(2) end
-    lines[#lines + 1] = summarized
-  end
-
-  if working_copy then
-    local description = working_copy.description
-    local has_description = description ~= ""
-    if not has_description then description = "(no description set)" end
-    if vim.api.nvim_strwidth(description) > max_width then
-      description = vim.fn.strcharpart(description, 0, max_width - 1) .. "…"
-    end
-    lines[#lines + 1] = {
-      { text = description, hl = not has_description and "Comment" or nil },
-    }
-  end
+  if #listed > 0 then lines[#lines + 1] = summary(listed) end
 
   return lines
 end
 
 --- Draws the recap of the listed files at the top-right corner of a list of
---- hunks, with each of its lines aligned to the right.
+--- hunks, with each of its lines aligned to the right and a column of padding
+--- on each side.
 ---@param list_win integer
 local draw_recap = function(list_win)
   local list_width = vim.api.nvim_win_get_width(list_win)
@@ -181,7 +242,7 @@ local draw_recap = function(list_win)
     end
     width = math.max(width, widths[idx])
   end
-  width = math.min(width, list_width)
+  width = math.max(math.min(width, list_width - 2), 1)
 
   local buf = recap
       and vim.api.nvim_win_is_valid(recap)
@@ -221,6 +282,7 @@ local draw_recap = function(list_win)
     height = #lines,
     focusable = false,
     style = "minimal",
+    border = { "", "", "", " ", "", "", "", " " },
   }
   if recap and vim.api.nvim_win_is_valid(recap) then
     vim.api.nvim_win_set_config(recap, config)
@@ -228,7 +290,7 @@ local draw_recap = function(list_win)
     config.noautocmd = true
     recap = vim.api.nvim_open_win(buf, false, config)
     vim.wo[recap].winhighlight =
-      "Normal:TroubleNormal,NormalFloat:TroubleNormal"
+      "Normal:HunksRecap,NormalFloat:HunksRecap,FloatBorder:HunksRecap"
     recaps[list_win] = recap
   end
 end
@@ -264,14 +326,6 @@ end
 
 M.config = {
   formatters = {
-    hunks_directory = function(ctx)
-      local directory = ctx.item.directory
-      local parent = ctx.node:parent_item()
-      if parent and parent.directory then
-        directory = directory:sub(#parent.directory + 1)
-      end
-      return { text = directory, hl = "TroubleDirectory" }
-    end,
     hunks_row = function(ctx)
       ---@type nvim_hunks.trouble.Entry
       local entry = ctx.item.item
@@ -287,21 +341,17 @@ M.config = {
 
       local segments = { Format.formatters.file_icon(ctx), { text = " " } }
       if file.status == "renamed" then
-        segments[#segments + 1] = {
-          -- Like the tree's directories, relative to the workspace's root.
-          text = assert(file.old_path) .. " → ",
-        }
+        segments[#segments + 1] = { text = assert(file.old_path) .. " → " }
       end
       segments[#segments + 1] = {
-        text = ctx.item.basename,
+        text = file.path,
         hl = file.status == "added" and "HunksAddedCount"
           or file.status == "removed" and "HunksDeletedCount"
-          or nil,
+          or "TroubleFilename",
       }
       vim.list_extend(segments, counts(file.hunks))
 
       local tag = file.binary and "binary"
-        or file.status == "added" and "new file"
         or file.status == "removed" and "deleted"
         or file.status == "copied" and "copied"
         or nil
@@ -326,12 +376,7 @@ M.config = {
           },
         },
       },
-      groups = {
-        {
-          "directory",
-          format = "{directory_icon} {hunks_directory}",
-        },
-      },
+      groups = {},
       sort = {},
       format = "{hunks_row}",
       -- A listing can take longer than trouble waits for it, so the list
@@ -381,10 +426,21 @@ local new_item = function(file, hunk, parent)
   })
 end
 
---- The roots of the jj workspaces listed while the list is open, taken from
---- the working directory it was opened in.
+--- The roots of the jj workspaces listed while the list is open: the one
+--- containing the working directory it was opened in.
 ---@type string[]?
 local roots
+
+--- The folded rows of the lists of hunks, keyed by node ID, which stay folded
+--- when a list is closed and opened again. The IDs of the files' rows are
+--- their paths.
+---@type table<string, true>
+local folds = {}
+
+--- The IDs of the rows of the files listed since Neovim started, whose rows
+--- keep their folds when the list opens again.
+---@type table<string, true?>
+local known_files = {}
 
 --- Returns the row of the hunk containing a buffer's line, or else the row
 --- of the buffer's file, if it's listed.
@@ -489,26 +545,22 @@ local without_preview = function(view, move)
   })
 end
 
---- Moves the cursor of a list of hunks to an item's row, or else to the first
---- row.
+--- Moves the cursor of a list of hunks to an item's row.
 ---@param view trouble.View
----@param target? trouble.Item
+---@param target trouble.Item
 local move_cursor_to = function(view, target)
   local win = list_win(view)
   if not win then return end
-  ---@type integer?
-  local first
   for row, location in ipairs(rows_of(view)) do
-    if target and location.item == target then
+    if location.item == target then
       return vim.api.nvim_win_set_cursor(win, { row, 0 })
     end
-    if location.node and not first then first = row end
   end
-  if first then vim.api.nvim_win_set_cursor(win, { first, 0 }) end
 end
 
 --- Collapses the rows of the files that are new to the list, or of all files
---- but the given one when the list is opening.
+--- whose folds aren't known when the list is opening, and expands the row of
+--- the given file.
 ---@param view trouble.View
 ---@param new_files table<trouble.Item, true>
 ---@param is_opening boolean
@@ -517,29 +569,17 @@ local collapse_files = function(view, new_files, is_opening, expanded)
   for _, location in pairs(rows_of(view)) do
     local item, node = location.item, location.node
     local is_file = item and node and not item.item.hunk and not node:is_leaf()
-    if item and node and is_file and (is_opening or new_files[item]) then
-      local action = item.item.file == expanded and "open" or "close"
-      view.renderer:fold(node, { action = action })
+    if item and node and is_file then
+      if item.item.file == expanded then
+        view.renderer:fold(node, { action = "open" })
+      elseif (is_opening or new_files[item]) and not known_files[item.id] then
+        view.renderer:fold(node, { action = "close" })
+      end
+      known_files[item.id] = true
     end
   end
   -- A view's own `render` is throttled, and the rows are needed right away.
   require("trouble.view").render(view)
-end
-
---- Returns the directory a file is listed under: its directory relative to
---- the root of its workspace, under the workspace's name if several are
---- listed. Files at the root of a single workspace aren't under any.
----@param file nvim_hunks.File
----@param in_several boolean
----@return string?
-local listed_dir = function(file, in_several)
-  local dir = vim.fs.dirname(file.path)
-  if dir == "." then dir = "" end
-  if in_several then
-    local name = vim.fs.basename(file.root)
-    dir = dir == "" and name or name .. "/" .. dir
-  end
-  return dir ~= "" and dir or nil
 end
 
 --- Calls a function once the window of a list of hunks is created, before
@@ -586,12 +626,6 @@ local generation = 0
 ---@type nvim_hunks.trouble.Opening?
 local opening
 
---- The folded rows of the lists of hunks, keyed by node ID, which stay folded
---- when a list is closed and opened again. The IDs of the directories' and
---- files' rows are made of their paths.
----@type table<string, true>
-local folds = {}
-
 --- Forgets the listings, and stops showing all diffs.
 local reset = function()
   roots = nil
@@ -610,7 +644,6 @@ end
 ---@param files nvim_hunks.File[]
 ---@return nvim_hunks.trouble.Listing
 local listing_of = function(files)
-  local in_several = #assert(roots) > 1
   local items = {}
   ---@type table<trouble.Item, true>
   local new_files = {}
@@ -626,10 +659,6 @@ local listing_of = function(files)
         items[#items + 1] = new_item(file, hunk, file_item)
       end
     end
-  end
-  for _, item in ipairs(items) do
-    -- The tree of directories starts at the workspaces' roots.
-    item.dirname = listed_dir(item.item.file, in_several)
   end
   return { items = items, new_files = new_files }
 end
@@ -663,7 +692,9 @@ local show = function(listing, cb)
     -- Only placing the cursor moves it to another item.
     without_preview(view, function()
       collapse_files(view, listing.new_files, true, target and target.item.file)
-      move_cursor_to(view, target)
+      -- Without a row under the main window's cursor, trouble's `restore`
+      -- option puts the cursor back on the row it was last on.
+      if target then move_cursor_to(view, target) end
     end)
   end)
 end
@@ -750,12 +781,25 @@ end
 ---@param cb fun(items: trouble.Item[])
 ---@param ctx { main?: trouble.Main, opts: { cwd?: string, center?: boolean } }
 M.get = function(cb, ctx)
-  for _, open in ipairs(require("trouble.view").get({ mode = "hunks" })) do
+  -- The lists that didn't open, like the ones without changes, keep
+  -- refreshing on the lists' events.
+  local views = require("trouble.view").get({ mode = "hunks" })
+  if #views == 0 and not opening and not ready then return cb({}) end
+  for _, open in ipairs(views) do
     open.view.renderer._folded = folds
   end
 
   if roots == nil then
-    roots = hunks.workspaces(ctx.opts.cwd)
+    local root = hunks.workspace(ctx.opts.cwd)
+    if not root then
+      vim.notify(
+        "Not in a jj workspace",
+        vim.log.levels.ERROR,
+        { title = "nvim-hunks" }
+      )
+      return cb({})
+    end
+    roots = { root }
     hunks.show_all(true)
 
     ---@type trouble.View?
@@ -835,8 +879,8 @@ M.preview = function(item, ctx)
 end
 
 --- Moves the changes of rows of a list of hunks into another revision: the
---- whole files of folder and file rows, and the hunks of hunk rows, except
---- the ones of files moved whole.
+--- whole files of file rows, and the hunks of hunk rows, except the ones of
+--- files moved whole.
 ---@param nodes trouble.Node[]
 ---@param into string
 M.move = function(nodes, into)
@@ -852,24 +896,18 @@ M.move = function(nodes, into)
   ---@type nvim_hunks.HunkSelection[], table<nvim_hunks.File, nvim_hunks.HunkSelection?>
   local selections, by_file = {}, {}
   for _, node in ipairs(nodes) do
-    if node:source() == "fs" then
-      for _, file in ipairs(files_of(node)) do
-        add_file(file)
+    ---@type nvim_hunks.trouble.Entry?
+    local entry = node.item and node.item.item --[[@as nvim_hunks.trouble.Entry?]]
+    if entry and entry.file and entry.hunk then
+      local selection = by_file[entry.file]
+      if not selection then
+        selection = { file = entry.file, hunks = {} }
+        by_file[entry.file] = selection
+        selections[#selections + 1] = selection
       end
-    else
-      ---@type nvim_hunks.trouble.Entry?
-      local entry = node.item and node.item.item --[[@as nvim_hunks.trouble.Entry?]]
-      if entry and entry.file and entry.hunk then
-        local selection = by_file[entry.file]
-        if not selection then
-          selection = { file = entry.file, hunks = {} }
-          by_file[entry.file] = selection
-          selections[#selections + 1] = selection
-        end
-        table.insert(selection.hunks, entry.hunk)
-      elseif entry and entry.file then
-        add_file(entry.file)
-      end
+      table.insert(selection.hunks, entry.hunk)
+    elseif entry and entry.file then
+      add_file(entry.file)
     end
   end
 
@@ -880,6 +918,37 @@ M.move = function(nodes, into)
   if #files == 0 and #selections == 0 then return end
   hunks.move_many(files, selections, into)
 end
+
+local list_namespace = vim.api.nvim_create_namespace("nvim-hunks-list")
+
+--- The lists of hunks being drawn, keyed by their windows.
+---@type table<integer, trouble.View?>
+local drawn_lists = {}
+
+-- The rows of added files have no hunks to fold, so their chevrons' cells
+-- show the files' letter in the recap instead.
+vim.api.nvim_set_decoration_provider(list_namespace, {
+  on_win = function(_, win)
+    drawn_lists[win] = nil
+    local trouble = vim.w[win].trouble
+    if not (trouble and trouble.mode == "hunks") then return false end
+    for _, open in ipairs(require("trouble.view").get({ mode = "hunks" })) do
+      if list_win(open.view) == win then drawn_lists[win] = open.view end
+    end
+    return drawn_lists[win] ~= nil
+  end,
+  on_line = function(_, win, bufnr, row)
+    local view = drawn_lists[win]
+    local item = view and view.renderer:at(row + 1).item
+    local entry = item and item.item --[[@as nvim_hunks.trouble.Entry?]]
+    if not entry or entry.hunk or entry.file.status ~= "added" then return end
+    vim.api.nvim_buf_set_extmark(bufnr, list_namespace, row, 1, {
+      virt_text = { { added_status[2], added_status[3] } },
+      virt_text_pos = "overlay",
+      ephemeral = true,
+    })
+  end,
+})
 
 local group =
   vim.api.nvim_create_augroup("nvim-hunks-trouble", { clear = true })

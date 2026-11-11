@@ -291,6 +291,36 @@ test(
 )
 
 test(
+  "markdown's delimiters are concealed unless the cursor is in their span",
+  function()
+    local root = h.repo({ "make **bold** and *it* and ~~gone~~" })
+    local bufnr = h.open(root)
+    local win = vim.api.nvim_get_current_win()
+    vim.wo[win].conceallevel = 2
+    vim.wo[win].concealcursor = "ni"
+
+    ---@param col integer
+    ---@return string
+    local text_at = function(col)
+      vim.api.nvim_win_set_cursor(win, { 2, col })
+      vim.api.nvim_exec_autocmds("CursorMoved", { buffer = bufnr })
+      vim.cmd.redraw()
+      local row = vim.fn.screenpos(win, 2, 1).row
+      local chars = {}
+      for screen_col = 1, vim.api.nvim_win_get_width(win) do
+        chars[#chars + 1] = vim.fn.screenstring(row, screen_col)
+      end
+      return vim.trim(table.concat(chars)):match("make.*$") or ""
+    end
+
+    h.eq(text_at(0), "make bold and it and gone")
+    h.eq(text_at(7), "make **bold** and it and gone")
+    h.eq(text_at(19), "make bold and *it* and gone")
+    h.eq(text_at(30), "make bold and it and ~~gone~~")
+  end
+)
+
+test(
   "a change opened on a branch above one takes none of its children",
   function()
     local root = h.repo({ "one", "two" })

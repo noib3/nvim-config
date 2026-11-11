@@ -1,6 +1,7 @@
 local jj = require("nvim_jj")
+local layout = require("utils.layout")
 
-jj.setup()
+jj.setup({ height = layout.split_height })
 
 --- Sets the options of a window showing a jj log. The backticks of code
 --- stay hidden on the cursor's line in normal and insert mode.
@@ -53,6 +54,20 @@ vim.api.nvim_create_autocmd("FileType", {
   callback = function(ev)
     local bufnr = ev.buf
     vim.bo[bufnr].textwidth = 0
+
+    -- blink.cmp's mappings would replace the log's own, like the one making
+    -- `<CR>` do nothing so that subjects stay on their lines.
+    vim.b[bufnr].completion = false
+
+    -- Set the jj log's `bcd` to the repo root.
+    local root = vim.api.nvim_buf_get_name(bufnr):match("^jj://(.+)$")
+    if root then
+      vim.api.nvim_buf_call(
+        bufnr,
+        function() vim.cmd.bcd({ args = { root } }) end
+      )
+    end
+
     ---@param modes string|string[]
     ---@param lhs string
     ---@param rhs fun()

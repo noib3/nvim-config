@@ -99,17 +99,26 @@ local read_file = function(path)
 end
 
 --- Returns the edits of a tool call: its diffs, or else its raw input's text
---- replacement.
+--- replacement, with relative paths resolved against a directory.
 ---@param call nvim_agents.ToolCall
+---@param cwd string
 ---@return nvim_agents.Edit[]
-local edits_of = function(call)
+local edits_of = function(call, cwd)
+  ---@param path string
+  ---@return string
+  local absolute = function(path)
+    if vim.startswith(path, "/") then return path end
+    return vim.fs.normalize(vim.fs.joinpath(cwd, path))
+  end
+
   local edits = {}
   for _, item in ipairs(call.content or {}) do
     if item.type == "diff" and type(item.path) == "string" then
-      local old_text = item.oldText or read_file(item.path)
+      local path = absolute(item.path)
+      local old_text = item.oldText or read_file(path)
       if old_text and type(item.newText) == "string" then
         edits[#edits + 1] = {
-          path = item.path,
+          path = path,
           old_text = old_text,
           new_text = item.newText,
         }
@@ -126,20 +135,27 @@ local edits_of = function(call)
     and type(old_text) == "string"
     and type(new_text) == "string"
   then
-    edits[1] = { path = path, old_text = old_text, new_text = new_text }
+    edits[1] = {
+      path = absolute(path),
+      old_text = old_text,
+      new_text = new_text,
+    }
   end
   return edits
 end
 
---- Returns the edits of a turn's tool calls that weren't applied.
+--- Returns the edits of a turn's tool calls that weren't applied. Agents report
+--- the calls of MCP tools, like an editor's edit tool, with the `other` kind,
+--- so a call of any kind is an edit if it has one.
 ---@param turn nvim_agents.Turn
+---@param cwd string The directory relative paths are resolved against.
 ---@return nvim_agents.Edit[]
-local unapplied_edits = function(turn)
+local unapplied_edits = function(turn, cwd)
   local edits = {}
   for _, id in ipairs(turn.order) do
     local call = assert(turn.tool_calls[id])
-    if call.kind == "edit" and call.status ~= "completed" then
-      vim.list_extend(edits, edits_of(call))
+    if call.status ~= "completed" then
+      vim.list_extend(edits, edits_of(call, cwd))
     end
   end
   return edits
@@ -392,7 +408,7 @@ function Conversation:next()
       else
         turn.handlers.done({
           text = turn.text,
-          edits = unapplied_edits(turn),
+          edits = unapplied_edits(turn, self.cwd),
           stop_reason = (result or {}).stopReason or "end_turn",
         })
       end

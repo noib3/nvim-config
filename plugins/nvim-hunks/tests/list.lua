@@ -127,16 +127,13 @@ test("the list opens on the hunk the cursor is in", function()
     vim.api.nvim_buf_get_lines(vim.api.nvim_win_get_buf(list), 0, -1, false)
   )
   h.eq(rows, {
-    " # #  docs/",
-    "   └╴#  new.md +1 (new file)",
-    " # #  modules/a/",
-    "   └╴#  x.txt +2 -2",
-    "     ├╴L2 +1 -1",
-    "     └╴L30 +1 -1",
-    " # #  src/",
-    "   └╴#  ren.txt → ren.txt",
+    "   #  docs/new.md +1",
+    " # #  modules/a/x.txt +2 -2",
+    "   ├╴L2 +1 -1",
+    "   └╴L30 +1 -1",
     "   #  old.txt -2 (deleted)",
     " # #  root.txt +1 -1",
+    "   #  ren.txt → src/ren.txt",
   })
 
   -- Opening the list doesn't preview the hunk, which would scroll the file.
@@ -153,7 +150,13 @@ test("the list opens on the hunk the cursor is in", function()
 
   h.wait(function() return recap() and #recap() == 3 end, "the recap is drawn")
   local text = assert(recap())
-  h.eq({ text[2], text[3] }, { "2m 1a 1d 1r (+4 -5)", "(no description set)" })
+  h.eq(text[1], "(no description set)")
+  h.eq(text[3], "1A, 1D, 2M, 1R, +4 -5")
+
+  -- The added file's row shows its letter where the others' chevrons are.
+  vim.cmd.redraw()
+  local new_md = vim.fn.screenpos(list, 1, 1)
+  h.eq(vim.fn.screenstring(new_md.row, new_md.col + 1), "A")
 end)
 
 test("moving the cursor previews below the file's floats", function()
@@ -163,7 +166,7 @@ test("moving the cursor previews below the file's floats", function()
     "CursorMoved",
     { buffer = vim.api.nvim_win_get_buf(assert(list_win())) }
   )
-  move_to(5)
+  move_to(3)
   h.wait(preview_win, "the hunk is previewed")
   local preview = assert(preview_win())
   h.eq(vim.api.nvim_win_get_cursor(preview)[1], 2)
@@ -176,7 +179,7 @@ test("moving the cursor previews below the file's floats", function()
   )
 
   -- A file that isn't loaded is previewed with its lines.
-  move_to(2)
+  move_to(1)
   h.wait(function()
     local win = preview_win()
     local buf = win and vim.api.nvim_win_get_buf(win)
@@ -194,7 +197,7 @@ test("moving the cursor previews below the file's floats", function()
   )
 
   -- A deleted file's preview spans the preview's width.
-  move_to(9)
+  move_to(5)
   h.wait(function()
     local win = preview_win()
     local name = win
@@ -243,11 +246,11 @@ test("the list follows the cursor of other windows", function()
 end)
 
 test("the list refreshes after jj operations", function()
-  h.run(root, { "jj", "describe", "--message", "listed" })
+  h.run(root, { "jj", "describe", "--message", "listed **with** `markup`" })
   h.wait(function()
     local text = recap()
-    return text and text[3] == "listed"
-  end, "the recap shows the new description")
+    return text and text[1] == "listed with markup"
+  end, "the recap shows the new description, without its delimiters")
 end)
 
 test("closing the list hides the diffs it showed", function()
@@ -259,61 +262,92 @@ test("closing the list hides the diffs it showed", function()
   h.wait(function() return recap() == nil end, "the recap is closed")
 end)
 
---- Returns the rows of the list, without their icons and trailing spaces.
----@return string[]
-local rows = function()
-  local list = assert(list_win())
-  return vim.tbl_map(
-    function(row)
-      return (
-        row
-          :gsub("[\238\239][\128-\191][\128-\191]", "#")
-          :gsub("\243[\128-\191][\128-\191][\128-\191]", "#")
-          :gsub("%s+$", "")
-      )
-    end,
-    vim.api.nvim_buf_get_lines(vim.api.nvim_win_get_buf(list), 0, -1, false)
-  )
+--- Opens the list, and waits until it shows its rows.
+local open_list = function()
+  ---@diagnostic disable-next-line: undefined-field
+  require("trouble").open({ mode = "hunks", focus = true, cwd = root })
+  h.wait(function()
+    local win = list_win()
+    return win ~= nil
+      and vim.api.nvim_buf_line_count(vim.api.nvim_win_get_buf(win)) > 1
+  end, "the list opens")
 end
 
-test("folded directories stay folded when the list opens again", function()
-  ---@diagnostic disable-next-line: undefined-field
-  require("trouble").open({ mode = "hunks", focus = true, cwd = root })
-  h.wait(
-    function() return list_win() ~= nil and #rows() > 1 end,
-    "the list opens"
-  )
+--- Closes the list, and waits until it's closed.
+local close_list = function()
+  vim.api.nvim_win_close(assert(list_win()), true)
+  h.wait(function() return not hunks.is_showing_all() end, "the list is closed")
+end
 
-  local view = assert(require("trouble.view").get({ mode = "hunks" })[1]).view
-  ---@type integer?
-  local src
-  for index, row in ipairs(rows()) do
-    if row:find("src/") then src = index end
+--- Returns the row of the list whose text contains a string, if any.
+---@param text string
+---@return integer?
+local row_with = function(text)
+  local buf = vim.api.nvim_win_get_buf(assert(list_win()))
+  for row, line in ipairs(vim.api.nvim_buf_get_lines(buf, 0, -1, false)) do
+    if line:find(text, 1, true) then return row end
   end
-  view:fold(assert(view.renderer:at(assert(src)).node), { action = "close" })
-  h.wait(
-    function()
-      return not vim.tbl_contains(rows(), "   └╴#  ren.txt → ren.txt")
-    end,
-    "src/ is folded"
-  )
+end
 
-  vim.api.nvim_win_close(assert(list_win()), true)
-  h.wait(function() return not hunks.is_showing_all() end, "the list is closed")
-  ---@diagnostic disable-next-line: undefined-field
-  require("trouble").open({ mode = "hunks", focus = true, cwd = root })
+test("expanded files stay expanded when the list opens again", function()
+  open_list()
+  local view = assert(require("trouble.view").get({ mode = "hunks" })[1]).view
+  local file = assert(row_with("root.txt"))
+  h.eq(row_with("L1 +1 -1"), nil, "root.txt starts collapsed")
+  view:fold(assert(view.renderer:at(file).node), { action = "open" })
+  h.wait(function() return row_with("L1 +1 -1") ~= nil end, "root.txt expands")
+
+  close_list()
+  open_list()
   h.wait(
-    function() return list_win() ~= nil and #rows() > 1 end,
-    "the list opens again"
+    function() return row_with("L1 +1 -1") ~= nil end,
+    "root.txt is still expanded"
   )
-  h.eq(vim.tbl_contains(rows(), " # #  src/"), true, vim.inspect(rows()))
-  h.eq(
-    vim.tbl_contains(rows(), "   └╴#  ren.txt → ren.txt"),
-    false,
-    vim.inspect(rows())
+  close_list()
+end)
+
+test("the list's cursor goes back to its last row", function()
+  open_list()
+  local list = assert(list_win())
+  vim.api.nvim_win_set_cursor(list, { assert(row_with("old.txt")), 0 })
+  vim.api.nvim_exec_autocmds(
+    "CursorMoved",
+    { buffer = vim.api.nvim_win_get_buf(list) }
   )
-  vim.api.nvim_win_close(assert(list_win()), true)
-  h.wait(function() return not hunks.is_showing_all() end, "the list is closed")
+  close_list()
+
+  -- The window it opens from shows no listed file.
+  vim.api.nvim_set_current_win(file_win)
+  vim.cmd.enew()
+  open_list()
+  h.wait(function()
+    local win = assert(list_win())
+    return vim.api.nvim_win_get_cursor(win)[1] == row_with("old.txt")
+  end, "the cursor is back on old.txt")
+  close_list()
+  vim.api.nvim_set_current_win(file_win)
+  vim.cmd.buffer(file_buf)
+end)
+
+test("the list doesn't open outside of a jj workspace", function()
+  local messages = {}
+  local notify = vim.notify
+  vim.notify = function(message) messages[#messages + 1] = message end
+  ---@diagnostic disable-next-line: undefined-field
+  require("trouble").open({
+    mode = "hunks",
+    focus = true,
+    cwd = assert(vim.uv.os_tmpdir()),
+  })
+  h.wait(function() return #messages > 0 end, "nvim-hunks says why")
+  h.wait(
+    function() return #require("trouble.view").get({ mode = "hunks" }) == 0 end,
+    "trouble is done opening the list"
+  )
+  vim.notify = notify
+  h.eq(messages, { "Not in a jj workspace" })
+  h.eq(list_win(), nil)
+  h.eq(hunks.is_showing_all(), false, "the diffs aren't all shown")
 end)
 
 test("the list doesn't open without changes", function()

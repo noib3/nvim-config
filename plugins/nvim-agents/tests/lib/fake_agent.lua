@@ -114,6 +114,24 @@ local prompt = function(id, session, text)
         },
       },
     })
+  elseif text == "mcp edit" then
+    -- Claude Code's hook denies the call before any permission request, and
+    -- the adapter reports MCP tools with the `other` kind.
+    update(session, {
+      sessionUpdate = "tool_call",
+      toolCallId = "edit-1",
+      title = "mcp__nvim__edit",
+      kind = "other",
+      status = "pending",
+      rawInput = { path = "a.txt", old_text = "old", new_text = "new" },
+    })
+    update(session, {
+      sessionUpdate = "tool_call_update",
+      toolCallId = "edit-1",
+      status = "failed",
+    })
+    chunk(session, "denied")
+    write({ id = id, result = { stopReason = "end_turn" } })
   elseif text == "read" then
     ask(session, id, {
       toolCallId = "read-1",

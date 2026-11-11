@@ -68,6 +68,7 @@ local overrides = {
       InclineNormal = { fg = "#ddc7a1", bg = "#3a3735" },
       InclineNormalNC = { fg = "#928374", bg = "#3a3735" },
       InclineDirty = { fg = "#b8bb26", bold = true },
+      HunksRecap = { link = "InclineNormal" },
 
       -- Neotest.
       NeotestPassed = { fg = "#b8bb26" },
@@ -82,8 +83,16 @@ local overrides = {
       -- Trouble.
       TroubleNormal = { link = "Normal" },
       TroubleNormalNC = { link = "Normal" },
-      TroubleDirectory = { fg = "#7daea3" },
-      TroubleFilename = { fg = "#a89984" },
+      TroubleFilename = { fg = "#bba887" },
+      TroubleIndentFoldClosed = { link = "JjChevron" },
+      TroubleIndentFoldOpen = { link = "JjChevron" },
+      TroubleCount = { fg = "#a9b665" },
+
+      -- Diagnostic signs.
+      DiagnosticSignError = { link = "DiagnosticError" },
+      DiagnosticSignWarn = { link = "DiagnosticWarn" },
+      DiagnosticSignInfo = { link = "DiagnosticInfo" },
+      DiagnosticSignHint = { link = "DiagnosticHint" },
     },
   },
   light = {
@@ -170,6 +179,7 @@ local overrides = {
       InclineNormal = { fg = "#50504a", bg = "#dac9a5" },
       InclineNormalNC = { fg = "#8b8b81", bg = "#dac9a5" },
       InclineDirty = { fg = "#b8bb26", bold = true },
+      HunksRecap = { link = "InclineNormal" },
 
       -- Neotest.
       NeotestPassed = { fg = "#b8bb26" },
@@ -184,8 +194,16 @@ local overrides = {
       -- Trouble.
       TroubleNormal = { link = "Normal" },
       TroubleNormalNC = { link = "Normal" },
-      TroubleDirectory = { fg = "#45707a" },
-      TroubleFilename = { fg = "#7c6f64" },
+      TroubleFilename = { fg = "#606057" },
+      TroubleIndentFoldClosed = { link = "JjChevron" },
+      TroubleIndentFoldOpen = { link = "JjChevron" },
+      TroubleCount = { fg = "#6c782e" },
+
+      -- Diagnostic signs.
+      DiagnosticSignError = { link = "DiagnosticError" },
+      DiagnosticSignWarn = { link = "DiagnosticWarn" },
+      DiagnosticSignInfo = { link = "DiagnosticInfo" },
+      DiagnosticSignHint = { link = "DiagnosticHint" },
     },
   },
 }

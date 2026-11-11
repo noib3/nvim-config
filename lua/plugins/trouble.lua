@@ -1,3 +1,5 @@
+local layout = require("utils.layout")
+
 -- trouble's module is a metatable that forwards to `trouble.api`, which EmmyLua
 -- can't see through.
 local trouble = require("trouble")
@@ -63,8 +65,7 @@ local move_to = function(into)
   }
 end
 
--- Rows with nested rows, like folders and files with hunks, fold instead of
--- jumping.
+-- Rows with nested rows, like files with hunks, fold instead of jumping.
 ---@type trouble.Action
 local fold_or_jump = {
   action = function(view, ctx)
@@ -110,14 +111,12 @@ trouble.setup({
       win = {
         type = "split",
         size = {
-          height = 14,
+          height = layout.split_height,
         },
       },
     },
     hunks = {
       center = true,
-      -- The list places its own cursor when it opens.
-      restore = false,
       keys = {
         ["<cr>"] = fold_or_jump,
         ["+"] = move_to("@+"),
@@ -126,7 +125,7 @@ trouble.setup({
       win = {
         type = "split",
         size = {
-          height = 14,
+          height = layout.split_height,
         },
       },
     },
@@ -146,7 +145,7 @@ trouble.setup({
       win = {
         type = "split",
         size = {
-          height = 12,
+          height = layout.split_height,
         },
       },
     },

@@ -85,6 +85,18 @@ test("edits are rejected, and returned as suggestions", function()
   )
 end)
 
+test(
+  "edits of MCP tools are returned as suggestions, with absolute paths",
+  function()
+    local reply = prompt(agents.fork(session), "mcp edit")
+    h.eq(assert(reply.result).text, "denied")
+    h.eq(
+      assert(reply.result).edits,
+      { { path = "/repo/a.txt", old_text = "old", new_text = "new" } }
+    )
+  end
+)
+
 test("reads are allowed", function()
   local reply = prompt(agents.fork(session), "read")
   h.eq(assert(reply.result).text, "allowed")

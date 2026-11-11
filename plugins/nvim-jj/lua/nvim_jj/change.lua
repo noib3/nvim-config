@@ -223,16 +223,82 @@ local text_of = function(chunks)
   return table.concat(vim.tbl_map(function(chunk) return chunk[1] end, chunks))
 end
 
---- Returns the spans of a subject in backticks, as the 0-based columns of
---- their opening and closing backticks.
+---@class nvim_jj.MarkupHighlight
+---@field start integer The 0-based column the highlight starts at.
+---@field finish integer The 0-based column the highlight ends before.
+---@field hl_group string
+
+---@class nvim_jj.MarkupConceal
+---@field start integer The 0-based column the concealed text starts at.
+---@field finish integer The 0-based column the concealed text ends before.
+---@field text string The text shown instead.
+---@field span [integer, integer] The 0-based columns the markup the concealed text belongs to starts at and ends before, like the emphasis of a delimiter.
+
+---@class nvim_jj.Markup
+---@field highlights nvim_jj.MarkupHighlight[]
+---@field conceals nvim_jj.MarkupConceal[]
+
+--- The markup of the texts parsed last, keyed by text.
+---@type table<string, nvim_jj.Markup?>
+local markup_cache = {}
+
+--- The number of texts in the cache of markup.
+local markup_cache_size = 0
+
+--- The number of texts past which the cache of markup is emptied.
+local max_markup_cache_size = 1000
+
+--- The captures of the highlights query that aren't highlights.
+local unhighlighted_captures = { conceal = true, nospell = true, spell = true }
+
+--- Returns the inline markdown of a line of text: the highlights and the
+--- concealed text of Neovim's highlights query for it.
 ---@param text string
----@return [integer, integer][]
-M.code_spans = function(text)
-  local spans = {}
-  for open, close in text:gmatch("()`[^`]*()`") do
-    spans[#spans + 1] = { open - 1, close - 1 }
+---@return nvim_jj.Markup
+M.markup = function(text)
+  local cached = markup_cache[text]
+  if cached then return cached end
+
+  ---@type nvim_jj.Markup
+  local markup = { highlights = {}, conceals = {} }
+  local ok, parser =
+    pcall(vim.treesitter.get_string_parser, text, "markdown_inline")
+  local query = ok and vim.treesitter.query.get("markdown_inline", "highlights")
+  if ok and query then
+    local root = parser:parse()[1]:root()
+    for id, node, metadata in query:iter_captures(root, text) do
+      local name = assert(query.captures[id])
+      local range = vim.treesitter.get_range(node, text, metadata[id])
+      local start, finish = range[2], range[5]
+      local conceal = metadata.conceal or (metadata[id] or {}).conceal
+      if type(conceal) == "string" then
+        -- Delimiters and the parts of links belong to their parent's markup.
+        local parent = node:parent()
+        local span = parent and parent:id() ~= root:id() and parent or node
+        local _, span_start, _, span_finish = span:range()
+        markup.conceals[#markup.conceals + 1] = {
+          start = start,
+          finish = finish,
+          text = conceal,
+          span = { span_start, span_finish },
+        }
+      end
+      if not name:match("^_") and not unhighlighted_captures[name] then
+        markup.highlights[#markup.highlights + 1] = {
+          start = start,
+          finish = finish,
+          hl_group = ("@%s.markdown_inline"):format(name),
+        }
+      end
+    end
   end
-  return spans
+
+  if markup_cache_size >= max_markup_cache_size then
+    markup_cache, markup_cache_size = {}, 0
+  end
+  markup_cache[text] = markup
+  markup_cache_size = markup_cache_size + 1
+  return markup
 end
 
 ---@class nvim_jj.ViewRow
@@ -796,8 +862,8 @@ M.edit_description = function(bufnr, description)
   table.insert(view.on_drawn, edit)
 end
 
---- Sets the options of a window showing a change. The backticks of the
---- subject's code are concealed, except around the cursor.
+--- Sets the options of a window showing a change. The delimiters of the
+--- description's markdown are concealed, except around the cursor.
 ---@param win integer
 M.set_window_options = function(win)
   local wo = vim.wo[win][0]
@@ -815,6 +881,16 @@ end
 ---@param bufnr integer
 ---@return boolean
 M.is_view = function(bufnr) return views[bufnr] ~= nil end
+
+--- Returns whether a line of a buffer showing a change is a line of its
+--- description.
+---@param bufnr integer
+---@param row integer The 0-based line.
+---@return boolean
+M.is_description_row = function(bufnr, row)
+  local view = views[bufnr]
+  return view ~= nil and row < summary_row(bufnr, view)
+end
 
 ---@class nvim_jj.Recap
 ---@field lines string[]
@@ -886,8 +962,8 @@ M.recap = function(root, id, on_done)
   end)
 end
 
---- Draws a recap's highlights in a buffer showing its lines, and conceals the
---- backticks of the subject's code like the view does. The window gets a
+--- Draws a recap's highlights in a buffer showing its lines, and highlights
+--- and conceals the subject's markdown like the view does. The window gets a
 --- column of padding on each side.
 ---@param bufnr integer
 ---@param win integer
@@ -906,19 +982,18 @@ M.decorate = function(bufnr, win, recap)
       }
     )
   end
-  for _, span in ipairs(M.code_spans(recap.lines[1] or "")) do
-    local open, close = span[1], span[2]
-    vim.api.nvim_buf_set_extmark(bufnr, namespace, 0, open + 1, {
-      end_col = close,
-      hl_group = "JjCode",
+  local markup = M.markup(recap.lines[1] or "")
+  for _, highlight in ipairs(markup.highlights) do
+    vim.api.nvim_buf_set_extmark(bufnr, namespace, 0, highlight.start, {
+      end_col = highlight.finish,
+      hl_group = highlight.hl_group,
     })
-    for _, col in ipairs({ open, close }) do
-      vim.api.nvim_buf_set_extmark(bufnr, namespace, 0, col, {
-        end_col = col + 1,
-        hl_group = "JjCodeDelimiter",
-        conceal = "",
-      })
-    end
+  end
+  for _, conceal in ipairs(markup.conceals) do
+    vim.api.nvim_buf_set_extmark(bufnr, namespace, 0, conceal.start, {
+      end_col = conceal.finish,
+      conceal = conceal.text,
+    })
   end
   vim.wo[win].conceallevel = 2
   vim.wo[win].concealcursor = "n"

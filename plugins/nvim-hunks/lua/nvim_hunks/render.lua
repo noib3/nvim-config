@@ -155,6 +155,19 @@ M.set_highlights = function(colors)
     fg = tonumber(colors.renamed:sub(2), 16),
   })
 
+  -- The recap of the listed changes styles its IDs like nvim-jj's log.
+  vim.api.nvim_set_hl(0, "HunksRecap", { default = true, link = "NormalFloat" })
+  vim.api.nvim_set_hl(0, "HunksChangeId", {
+    bold = true,
+    default = true,
+    fg = color_of("Identifier", "fg"),
+  })
+  vim.api.nvim_set_hl(0, "HunksChangeIdRest", {
+    default = true,
+    fg = color_of("Comment", "fg"),
+  })
+  vim.api.nvim_set_hl(0, "HunksBookmark", { default = true, link = "Constant" })
+
   -- The numbers of files take the hues of the numbers of lines.
   local lightness = vim.o.background == "dark" and -file_lightness
     or file_lightness

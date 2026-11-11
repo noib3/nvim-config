@@ -8,10 +8,12 @@ local all_splits_are_terminals = function()
     :filter(function(win) return vim.fn.win_gettype(win) == "" end)
     :all(function(win)
       local buf = vim.api.nvim_win_get_buf(win)
+      local trouble = vim.w[win].trouble
       return vim.bo[buf].buftype == "terminal"
-        -- Make the jj log count as a terminal so that opening it below a
-        -- terminal doesn't bring up the statusline.
+        -- Make the jj log and the list of hunks count as terminals so that
+        -- opening them below a terminal doesn't bring up the statusline.
         or vim.bo[buf].filetype == "jjlog"
+        or (trouble and trouble.mode == "hunks")
     end)
 end
 

@@ -262,6 +262,23 @@ test("writing the view describes the change", function()
   vim.cmd("quit!")
 end)
 
+test("the description's markdown is concealed away from the cursor", function()
+  local _, bufnr = repo()
+  local view = open(bufnr, "work", "here")
+  local win = vim.api.nvim_get_current_win()
+  vim.api.nvim_buf_set_lines(view, 0, 1, false, { "work", "", "some `code`" })
+  vim.api.nvim_win_set_cursor(win, { 1, 0 })
+  vim.cmd.redraw()
+
+  local row = vim.fn.screenpos(win, 3, 1).row
+  local chars = {}
+  for screen_col = 1, vim.api.nvim_win_get_width(win) do
+    chars[#chars + 1] = vim.fn.screenstring(row, screen_col)
+  end
+  h.eq(vim.trim(table.concat(chars)), "some code")
+  vim.cmd("quit!")
+end)
+
 test("a change can be viewed in a split next to the log", function()
   local _, bufnr = repo()
   local log_win = vim.api.nvim_get_current_win()

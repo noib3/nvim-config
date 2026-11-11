@@ -965,25 +965,10 @@ local workspace_files = function(root, on_done)
   end)
 end
 
---- Returns the roots of the jj workspaces around a directory: the one
---- containing it, or else the ones directly inside it.
+--- Returns the root of the jj workspace containing a directory, if any.
 ---@param dir? string The directory, the current working directory by default.
----@return string[]
-M.workspaces = function(dir)
-  local cwd = dir or vim.fn.getcwd()
-  local root = jj.root(cwd)
-  if root then return { root } end
-
-  local roots = {}
-  for name, type in vim.fs.dir(cwd) do
-    local dir = vim.fs.joinpath(cwd, name)
-    if type == "directory" and uv.fs_stat(vim.fs.joinpath(dir, ".jj")) then
-      roots[#roots + 1] = vim.fs.normalize(dir)
-    end
-  end
-  table.sort(roots)
-  return roots
-end
+---@return string?
+M.workspace = function(dir) return jj.root(dir or vim.fn.getcwd()) end
 
 --- Computes the files changed by the working-copy commits of the given jj
 --- workspaces.
