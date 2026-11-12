@@ -127,6 +127,17 @@ test("the graph and details between changes are virtual lines", function()
   })
 end)
 
+test("the graph below a change continues its edges", function()
+  local root = h.repo({ "one", "two" })
+  h.run(root, { "jj", "new", "--quiet", "@--", "-m", "three" })
+  local bufnr = h.open(root)
+
+  h.eq(nvim_jj.graph_below(bufnr, 1), { { "│  ", "JjGraph" } })
+  h.eq(nvim_jj.graph_below(bufnr, 2), { { "│    ", "JjGraph" } })
+  h.eq(nvim_jj.graph_below(bufnr, 4), { { "   ", "JjGraph" } })
+  h.eq(nvim_jj.graph_below(vim.api.nvim_create_buf(false, true), 1), nil)
+end)
+
 test("bookmarks follow the subject", function()
   local root = h.repo({ "one" }, 1)
   local bufnr = h.open(root)

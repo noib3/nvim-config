@@ -70,6 +70,9 @@ local overrides = {
       InclineDirty = { fg = "#b8bb26", bold = true },
       HunksRecap = { link = "InclineNormal" },
 
+      -- Inline select.
+      InlineSelectChevron = { fg = "#934c48" },
+
       -- Neotest.
       NeotestPassed = { fg = "#b8bb26" },
       NeotestFailed = { fg = "#fb4934" },
@@ -180,6 +183,9 @@ local overrides = {
       InclineNormalNC = { fg = "#8b8b81", bg = "#dac9a5" },
       InclineDirty = { fg = "#b8bb26", bold = true },
       HunksRecap = { link = "InclineNormal" },
+
+      -- Inline select.
+      InlineSelectChevron = { fg = "#b0716a" },
 
       -- Neotest.
       NeotestPassed = { fg = "#b8bb26" },

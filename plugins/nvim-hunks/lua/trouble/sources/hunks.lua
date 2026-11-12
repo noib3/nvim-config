@@ -956,6 +956,7 @@ vim.api.nvim_set_decoration_provider(list_namespace, {
     vim.api.nvim_buf_set_extmark(bufnr, list_namespace, row, 1, {
       virt_text = { { added_status[2], added_status[3] } },
       virt_text_pos = "overlay",
+      hl_mode = "combine",
       ephemeral = true,
     })
   end,

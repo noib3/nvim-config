@@ -3216,6 +3216,41 @@ M.run_action = function(bufnr, line, title)
   if not ok then ctx.set_status("failed", tostring(err)) end
 end
 
+--- The characters of jj's graph with an edge going down out of them.
+local edges_down = {
+  ["│"] = true,
+  ["├"] = true,
+  ["┤"] = true,
+  ["┼"] = true,
+  ["╭"] = true,
+  ["╮"] = true,
+  ["┬"] = true,
+}
+
+--- Returns the graph of a line below the lines drawn for the change on a line
+--- of a log buffer, as virtual text chunks. The graph has the edges going
+--- down out of the last of those lines, and is as wide as its graph. Returns
+--- nil outside of a log buffer.
+---@param bufnr integer
+---@param line integer The 1-based line.
+---@return [string, string][]?
+M.graph_below = function(bufnr, line)
+  local log = logs[bufnr]
+  local row = log and log.rows[line]
+  if not row then return end
+  local last = row.below[#row.below]
+  local graph = vim
+    .iter(vim.fn.split(last and last.graph or row.graph, [[\zs]]))
+    :map(
+      function(char)
+        return edges_down[char] and "│"
+          or (" "):rep(vim.api.nvim_strwidth(char))
+      end
+    )
+    :join("")
+  return { { graph, "JjGraph" } }
+end
+
 --- Opens a view of the change on a line of a log buffer: in a split right of
 --- its window, or in a float centered on the editor.
 ---@param bufnr integer
