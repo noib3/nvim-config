@@ -303,6 +303,17 @@ local list_win = function(view)
   return win and vim.api.nvim_win_is_valid(win) and win or nil
 end
 
+--- Returns whether a window shows a list of hunks. A window keeps trouble's
+--- variable when trouble jumps from the list it showed to a file in it.
+---@param win integer
+---@return boolean
+local is_list = function(win)
+  local trouble = vim.w[win].trouble
+  return trouble ~= nil
+    and trouble.mode == "hunks"
+    and vim.bo[vim.api.nvim_win_get_buf(win)].filetype == "trouble"
+end
+
 --- Returns the rows a list of hunks shows, from the top.
 ---@param view trouble.View
 ---@return trouble.Render.Location[]
@@ -968,7 +979,11 @@ vim.api.nvim_create_autocmd("CursorMoved", {
   desc = "Moves the cursors of the lists of hunks to the row under the cursor",
   callback = function(ev)
     local win = vim.api.nvim_get_current_win()
-    if opening or vim.w[win].trouble or vim.w[win].trouble_preview then
+    if
+      opening
+      or vim.bo[ev.buf].filetype == "trouble"
+      or vim.w[win].trouble_preview
+    then
       return
     end
     local found =
@@ -993,24 +1008,31 @@ vim.api.nvim_create_autocmd("CursorMoved", {
   end,
 })
 
-vim.api.nvim_create_autocmd("WinClosed", {
+vim.api.nvim_create_autocmd({ "WinClosed", "BufWinEnter" }, {
   group = group,
-  desc = "Stops showing all diffs once no list of hunks is open",
+  desc = "Moves the recaps to the windows of the lists of hunks, and stops showing all diffs once none is open",
   -- The closed window is still valid while WinClosed runs, and trouble would
   -- refresh the list in it.
   callback = vim.schedule_wrap(function()
     for list_win, recap in pairs(recaps) do
-      if not vim.api.nvim_win_is_valid(list_win) then
+      if not vim.api.nvim_win_is_valid(list_win) or not is_list(list_win) then
         if vim.api.nvim_win_is_valid(recap) then
           vim.api.nvim_win_close(recap, true)
         end
         recaps[list_win] = nil
       end
     end
+    -- trouble opens a list again in a new window after jumping to an item in
+    -- its window.
+    for _, open in ipairs(require("trouble.view").get({ mode = "hunks" })) do
+      local win = list_win(open.view)
+      if win and not recaps[win] then draw_recap(win) end
+    end
 
+    -- A list that's opening has no window until its first listing.
+    if not roots or opening then return end
     for _, win in ipairs(vim.api.nvim_list_wins()) do
-      local trouble = vim.w[win].trouble
-      if trouble and trouble.mode == "hunks" then return end
+      if is_list(win) then return end
     end
     reset()
   end),

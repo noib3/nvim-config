@@ -31,12 +31,20 @@ local root = h.repo({
   ["root.txt"] = "after\n",
 })
 
---- Returns the window of the list of hunks.
+--- Returns the window of the list of hunks. A window trouble jumped to a file
+--- in keeps the list's variable.
 ---@return integer?
 local list_win = function()
   for _, win in ipairs(vim.api.nvim_list_wins()) do
     local trouble = vim.w[win].trouble
-    if trouble and trouble.mode == "hunks" then return win end
+    local buf = vim.api.nvim_win_get_buf(win)
+    if
+      trouble
+      and trouble.mode == "hunks"
+      and vim.bo[buf].filetype == "trouble"
+    then
+      return win
+    end
   end
 end
 
@@ -385,4 +393,38 @@ test("a listing slower than trouble waits for still opens the list", function()
     "the list is focused"
   )
   vim.api.nvim_win_close(assert(list_win()), true)
+end)
+
+test("jumping from a list without another window moves its recap", function()
+  h.wait(
+    function() return not hunks.is_showing_all() end,
+    "the previous list is closed"
+  )
+  open_list()
+  local old = assert(list_win())
+  for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+    if win ~= old and vim.fn.win_gettype(win) ~= "popup" then
+      vim.api.nvim_win_close(win, true)
+    end
+  end
+  h.wait(function() return recap() ~= nil end, "the recap is drawn")
+
+  -- Without another window, trouble jumps in the list's window, and opens
+  -- the list again in a new one.
+  vim.api.nvim_win_set_cursor(old, { assert(row_with("L2")), 0 })
+  local view = assert(require("trouble.view").get({ mode = "hunks" })[1]).view
+  view:jump()
+  h.wait(function()
+    local win = list_win()
+    return win ~= nil and win ~= old
+  end, "the list opens again")
+  h.wait(function() return recap() ~= nil end, "the new list has a recap")
+  h.wait(function()
+    return #vim.tbl_filter(
+      function(win) return vim.api.nvim_win_get_config(win).win == old end,
+      vim.api.nvim_list_wins()
+    ) == 0
+  end, "no float is left on the file's window")
+
+  close_list()
 end)
