@@ -232,55 +232,60 @@ test(
   end
 )
 
-test("the float follows its thread up when an edit deletes lines above it", function()
-  threads.register(h.participant("trimmer", { "Drop them." }, {
-    edits = {
-      { path = "g.txt", old_text = "two\nthree\n", new_text = "" },
-    },
-  }))
-  local trimmed_root = h.repo({
-    ["g.txt"] = h.text({ "one", "two", "three", "four", "five" }),
-  }, {})
-  -- The previous test leaves the cursor in a float.
-  h.leave()
-  local bufnr = h.open(trimmed_root, "g.txt")
-  vim.api.nvim_feedkeys(vim.keycode("4G<F2>"), "x", false)
-  vim.cmd.stopinsert()
-  h.type({ "@trimmer drop two and three" })
-  h.eq(threads.submit(), true)
-  h.leave()
+test(
+  "the float follows its thread up when an edit deletes lines above it",
+  function()
+    threads.register(h.participant("trimmer", { "Drop them." }, {
+      edits = {
+        { path = "g.txt", old_text = "two\nthree\n", new_text = "" },
+      },
+    }))
+    local trimmed_root = h.repo({
+      ["g.txt"] = h.text({ "one", "two", "three", "four", "five" }),
+    }, {})
+    -- The previous test leaves the cursor in a float.
+    h.leave()
+    local bufnr = h.open(trimmed_root, "g.txt")
+    vim.api.nvim_feedkeys(vim.keycode("4G<F2>"), "x", false)
+    vim.cmd.stopinsert()
+    h.type({ "@trimmer drop two and three" })
+    h.eq(threads.submit(), true)
+    h.leave()
 
-  ---@type nvim_threads.Thread?
-  local thread
-  threads.list(trimmed_root, function(entries)
-    thread = assert(entries[1]).thread
-  end)
-  h.wait(
-    function() return thread ~= nil and #thread.comments == 2 end,
-    "the participant replies"
-  )
+    ---@type nvim_threads.Thread?
+    local thread
+    threads.list(
+      trimmed_root,
+      function(entries) thread = assert(entries[1]).thread end
+    )
+    h.wait(
+      function() return thread ~= nil and #thread.comments == 2 end,
+      "the participant replies"
+    )
 
-  vim.api.nvim_win_set_cursor(0, { 4, 0 })
-  h.eq(threads.step(1, "j"), true)
-  h.eq(threads.activate(), true, "the thread expands")
-  local float_win = vim.api.nvim_get_current_win()
-  local float_buf = vim.api.nvim_get_current_buf()
-  local header = line_of(float_buf, "▾ ✎ Suggested edits to g.txt")
-  execute(float_buf, assert(code_actions(float_buf, header)[1]))
-  h.wait(
-    function() return vim.api.nvim_buf_line_count(bufnr) == 3 end,
-    "the edit is applied"
-  )
+    vim.api.nvim_win_set_cursor(0, { 4, 0 })
+    h.eq(threads.step(1, "j"), true)
+    h.eq(threads.activate(), true, "the thread expands")
+    local float_win = vim.api.nvim_get_current_win()
+    local float_buf = vim.api.nvim_get_current_buf()
+    local header = line_of(float_buf, "▾ ✎ Suggested edits to g.txt")
+    execute(float_buf, assert(code_actions(float_buf, header)[1]))
+    h.wait(
+      function() return vim.api.nvim_buf_line_count(bufnr) == 3 end,
+      "the edit is applied"
+    )
 
-  local shown = require("nvim_threads.float").get(float_win)
-  h.eq(shown ~= nil, true, "the float stays open")
-  h.eq(assert(shown).row, 1, "the float follows the line its thread is on")
-  h.eq(
-    vim.api.nvim_win_get_config(float_win).row,
-    vim.fn.screenpos(shown.source_win, 2, 1).row,
-    "the float starts right below that line"
-  )
-end)
+    local shown = require("nvim_threads.float").get(float_win)
+    h.eq(shown ~= nil, true, "the float stays open")
+    ---@cast shown -nil
+    h.eq(shown.row, 1, "the float follows the line its thread is on")
+    h.eq(
+      vim.api.nvim_win_get_config(float_win).row,
+      vim.fn.screenpos(shown.source_win, 2, 1).row,
+      "the float starts right below that line"
+    )
+  end
+)
 
 test("an edit without old text creates its file", function()
   threads.register(h.participant("creator", { "Add it." }, {

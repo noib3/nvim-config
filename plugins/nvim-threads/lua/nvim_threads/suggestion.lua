@@ -150,12 +150,13 @@ end
 local edit_diff = function(path, lines, edit, index, resolution)
   ---@type string[]?, string[]?
   local old, new
-  if not edit.old_text and resolution == "applied" then
+  local old_text = edit.old_text
+  if resolution == "applied" and not old_text then
     -- An applied edit that created the file added all of its lines.
     old, new = {}, created_lines(edit)
-  elseif resolution == "applied" then
+  elseif resolution == "applied" and old_text then
     old = M.apply_edits(lines, {
-      { path = path, old_text = edit.new_text, new_text = edit.old_text },
+      { path = path, old_text = edit.new_text, new_text = old_text },
     })
     new = old and lines
   else
