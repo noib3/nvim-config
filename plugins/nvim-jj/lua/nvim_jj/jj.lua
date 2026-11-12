@@ -646,7 +646,10 @@ M.fetch = function(root, on_done)
     for name, kind in
       (result.stderr or ""):gmatch("bookmark: (%S+)@%S+ %[(%a+)%]")
     do
-      bookmarks[#bookmarks + 1] = { name = name, kind = kind }
+      bookmarks[#bookmarks + 1] = {
+        name = name,
+        kind = kind --[[@as "new"|"updated"|"deleted"]],
+      }
     end
     on_done(nil, bookmarks)
   end)
@@ -669,7 +672,9 @@ M.remotes = function(root, on_done)
     local remotes = {}
     for line in (result.stdout or ""):gmatch("[^\n]+") do
       local name, url = line:match("^(%S+)%s+(%S+)")
-      if name then remotes[#remotes + 1] = { name = name, url = url } end
+      if name and url then
+        remotes[#remotes + 1] = { name = name, url = url }
+      end
     end
 
     local config_args = { "--ignore-working-copy", "config", "get", "git.push" }

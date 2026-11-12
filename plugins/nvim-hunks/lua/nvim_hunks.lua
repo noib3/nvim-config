@@ -1146,15 +1146,20 @@ local lines_of_hunks = function(hunk_list)
   return selected_old, selected_new
 end
 
---- Moves whole files and some of the hunks of others into another revision.
---- The revision is picked once per workspace. Each workspace's whole files
---- are moved together, and then each file's hunks together, with its rename
---- if it was renamed, one jj operation after the other.
----@param files nvim_hunks.File[] The files moved whole.
+---@class nvim_hunks.Changes
+---@field paths string[] The paths of the files changed whole, relative to the root.
+---@field selections nvim_hunks.HunkSelection[]
+
+--- Groups whole files and some of the hunks of others by workspace, in the
+--- order the workspaces first appear. Returns nothing after reporting it if
+--- one of their buffers has unsaved edits, or if a file changed since its
+--- hunks were computed.
+---@param files nvim_hunks.File[]
 ---@param selections nvim_hunks.HunkSelection[]
----@param into string
-M.move_many = function(files, selections, into)
-  ---@type string[], table<string, { paths: string[], selections: nvim_hunks.HunkSelection[] }>
+---@return string[]? roots
+---@return table<string, nvim_hunks.Changes>? changes
+local changes_by_root = function(files, selections)
+  ---@type string[], table<string, nvim_hunks.Changes>
   local roots, groups = {}, {}
   ---@param root string
   local group_of = function(root)
@@ -1187,10 +1192,45 @@ M.move_many = function(files, selections, into)
     local lines = file.status == "removed" and {} or read_lines(path) or {}
     if not vim.deep_equal(lines, file.lines) then
       notify_error("A file changed since its hunks were computed")
-      return fire(files_changed_event)
+      fire(files_changed_event)
+      return
     end
     table.insert(group_of(file.root).selections, selection)
   end
+
+  return roots, groups
+end
+
+--- Runs steps one after the other, each once the one before calls back, and
+--- then calls back.
+---@param steps fun(on_done: fun())[]
+---@param on_done? fun()
+local run_in_order = function(steps, on_done)
+  local index = 0
+  ---@type fun()
+  local step
+  step = function()
+    index = index + 1
+    local next_step = steps[index]
+    if next_step then
+      next_step(step)
+    elseif on_done then
+      on_done()
+    end
+  end
+  step()
+end
+
+--- Moves whole files and some of the hunks of others into another revision.
+--- The revision is picked once per workspace. Each workspace's whole files
+--- are moved together, and then each file's hunks together, with its rename
+--- if it was renamed, one jj operation after the other.
+---@param files nvim_hunks.File[] The files moved whole.
+---@param selections nvim_hunks.HunkSelection[]
+---@param into string
+M.move_many = function(files, selections, into)
+  local roots, groups = changes_by_root(files, selections)
+  if not roots or not groups then return end
 
   for _, root in ipairs(roots) do
     local group = groups[root]
@@ -1223,17 +1263,92 @@ M.move_many = function(files, selections, into)
           )
         end
       end
-
-      local index = 0
-      ---@type fun()
-      local step
-      step = function()
-        index = index + 1
-        local next_step = steps[index]
-        if next_step then next_step(step) end
-      end
-      step()
+      run_in_order(steps)
     end)
+  end
+end
+
+--- Drops some of a file's hunks from the working-copy commit, keeping its
+--- other hunks, and its rename if it was renamed.
+---@param file nvim_hunks.File
+---@param dropped nvim_hunks.Hunk[]
+---@param on_dropped fun()
+local drop_hunks = function(file, dropped, on_dropped)
+  ---@type table<nvim_hunks.Hunk, true?>
+  local is_dropped = {}
+  for _, hunk in ipairs(dropped) do
+    is_dropped[hunk] = true
+  end
+  local kept_old, kept_new = lines_of_hunks(
+    vim.tbl_filter(function(hunk) return not is_dropped[hunk] end, file.hunks)
+  )
+  local lines, eol = apply(
+    file.base_lines,
+    file.lines,
+    file.hunks,
+    kept_old,
+    kept_new,
+    file.base_eol,
+    file.eol
+  )
+
+  ---@param err? string
+  local on_restored = function(err)
+    vim.schedule(function()
+      if err then return notify_error(err) end
+      reload_files(file.root, { file.path })
+      on_dropped()
+    end)
+  end
+
+  check_base(file, function()
+    -- A file left without changes is restored whole, which also deletes an
+    -- added file and brings back a deleted one.
+    if
+      not file.old_path
+      and vim.deep_equal(lines, file.base_lines)
+      and eol == file.base_eol
+    then
+      return jj.restore_paths(file.root, { file.path }, on_restored)
+    end
+    local text = #lines > 0
+        and table.concat(lines, "\n") .. (eol and "\n" or "")
+      or ""
+    jj.restore_file(file.root, file.path, text, on_restored)
+  end)
+end
+
+--- Drops whole files and some of the hunks of others from the working-copy
+--- commit, which undoes their changes. Each workspace's whole files are
+--- dropped together, renames included, and then each file's hunks together,
+--- one jj operation after the other.
+---@param files nvim_hunks.File[] The files dropped whole.
+---@param selections nvim_hunks.HunkSelection[]
+M.drop_many = function(files, selections)
+  local roots, groups = changes_by_root(files, selections)
+  if not roots or not groups then return end
+
+  for _, root in ipairs(roots) do
+    local group = groups[root]
+    ---@type fun(on_done: fun())[]
+    local steps = {}
+    if #group.paths > 0 then
+      steps[#steps + 1] = function(on_done)
+        jj.restore_paths(root, group.paths, function(err)
+          vim.schedule(function()
+            if err then return notify_error(err) end
+            reload_files(root, group.paths)
+            on_done()
+          end)
+        end)
+      end
+    end
+    for _, selection in ipairs(group.selections) do
+      steps[#steps + 1] = function(on_done)
+        drop_hunks(selection.file, selection.hunks, on_done)
+      end
+    end
+    run_in_order(steps, function() reload_root(root) end)
   end
 end
 

@@ -82,6 +82,11 @@ local move_to = function(into)
   }
 end
 
+---@param view trouble.View
+local drop = function(view)
+  require("trouble.sources.hunks").drop(view:selection())
+end
+
 -- Rows with nested rows, like files with hunks, fold instead of jumping.
 ---@type trouble.Action
 local fold_or_jump = {
@@ -138,6 +143,15 @@ trouble.setup({
         ["<cr>"] = fold_or_jump,
         ["+"] = move_to("@+"),
         ["-"] = move_to("@-"),
+        ["dd"] = {
+          action = drop,
+          desc = "Drop the hunk or file from the working-copy change",
+        },
+        ["d"] = {
+          action = drop,
+          desc = "Drop the selected hunks or files from the working-copy change",
+          mode = "x",
+        },
       },
       win = {
         type = "split",

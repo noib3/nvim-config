@@ -460,7 +460,7 @@ local draw_remotes = function()
   end
   for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
     local log = logs[vim.api.nvim_win_get_buf(win)]
-    if log and vim.api.nvim_win_get_config(win).relative == "" then
+    if log and vim.fn.win_gettype(win) ~= "popup" then
       draw_remote_float(win, remote_chunks(log))
     end
   end
@@ -498,7 +498,7 @@ local update_spinner = function()
       spinner.frame = spinner.frame % #spinner_frames + 1
       local fetching = false
       for bufnr, log in pairs(logs) do
-        fetching = fetching or (log.fetch and log.fetch.kind == "busy")
+        fetching = fetching or (log.fetch ~= nil and log.fetch.kind == "busy")
         for id, status in pairs(log.statuses) do
           if status.kind == "busy" then redraw_right(bufnr, id) end
         end

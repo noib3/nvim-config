@@ -99,7 +99,10 @@ test("fetching draws its progress and outcome before the remotes", function()
 
   local done = false
   nvim_jj.fetch(bufnr, function() done = true end)
-  h.eq(vim.endswith(remotes_float(bufnr), " Fetching  " .. remotes), true)
+  h.eq(
+    vim.endswith(assert(remotes_float(bufnr)), " Fetching  " .. remotes),
+    true
+  )
   h.wait(function() return done end, "the fetch is done")
   h.eq(remotes_float(bufnr), ("\239\144\174  Up to date  %s"):format(remotes))
 end)

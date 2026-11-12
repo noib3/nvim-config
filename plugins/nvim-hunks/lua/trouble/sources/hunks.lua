@@ -889,12 +889,12 @@ M.preview = function(item, ctx)
   end
 end
 
---- Moves the changes of rows of a list of hunks into another revision: the
---- whole files of file rows, and the hunks of hunk rows, except the ones of
---- files moved whole.
+--- Returns the changes of rows of a list of hunks: the whole files of file
+--- rows, and the hunks of hunk rows, except the ones of those files.
 ---@param nodes trouble.Node[]
----@param into string
-M.move = function(nodes, into)
+---@return nvim_hunks.File[] files
+---@return nvim_hunks.HunkSelection[] selections
+local changes_of = function(nodes)
   ---@type nvim_hunks.File[], table<nvim_hunks.File, true?>
   local files, whole = {}, {}
   ---@param file nvim_hunks.File
@@ -926,8 +926,28 @@ M.move = function(nodes, into)
     function(selection) return not whole[selection.file] end,
     selections
   )
+  return files, selections
+end
+
+--- Moves the changes of rows of a list of hunks into another revision: the
+--- whole files of file rows, and the hunks of hunk rows, except the ones of
+--- files moved whole.
+---@param nodes trouble.Node[]
+---@param into string
+M.move = function(nodes, into)
+  local files, selections = changes_of(nodes)
   if #files == 0 and #selections == 0 then return end
   hunks.move_many(files, selections, into)
+end
+
+--- Drops the changes of rows of a list of hunks from the working-copy commit:
+--- the whole files of file rows, and the hunks of hunk rows, except the ones
+--- of files dropped whole.
+---@param nodes trouble.Node[]
+M.drop = function(nodes)
+  local files, selections = changes_of(nodes)
+  if #files == 0 and #selections == 0 then return end
+  hunks.drop_many(files, selections)
 end
 
 local list_namespace = vim.api.nvim_create_namespace("nvim-hunks-list")

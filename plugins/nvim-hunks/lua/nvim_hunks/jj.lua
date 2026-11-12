@@ -244,31 +244,20 @@ local on_success = function(on_done)
   end
 end
 
---- Moves part of the working-copy commit's changes to a file into another
---- revision. The part moved is what turns the file's contents in the
---- working-copy commit's merged parents into the given text. The changes to the
---- other given paths are moved in full, e.g. the deletion of a renamed
---- file's old path.
----@param root string
----@param into string
+--- Writes a text to a temporary file, and returns the arguments of a jj
+--- command with a diff editor that gives a file of its right side that text,
+--- and the temporary file's path.
 ---@param path string The file's path relative to the root.
 ---@param text string
----@param other_paths string[]
----@param on_done fun(err?: string)
-M.squash_file = function(root, into, path, text, other_paths, on_done)
+---@return string[] args
+---@return string text_path
+local text_editor_args = function(path, text)
   local text_path = vim.fn.tempname()
   local file = assert(io.open(text_path, "wb"))
   file:write(text)
   file:close()
 
-  local args = {
-    "squash",
-    "--from",
-    "@",
-    "--into",
-    into,
-    "--use-destination-message",
-    "--keep-emptied",
+  return {
     "--tool",
     "nvim-hunks",
     "--config",
@@ -278,9 +267,35 @@ M.squash_file = function(root, into, path, text, other_paths, on_done)
       toml_string(text_path),
       toml_string("$right/" .. path)
     ),
-    "--",
-    root_file(path),
+  },
+    text_path
+end
+
+--- Moves part of the working-copy commit's changes to a file into another
+--- revision. The part moved is what turns the file's contents in the
+--- working-copy commit's merged parents into the given text. The changes to the
+--- other given paths are moved in full, e.g. the deletion of a renamed
+--- file's old path. The working-copy commit stays, with its description, even
+--- once it's left without changes.
+---@param root string
+---@param into string
+---@param path string The file's path relative to the root.
+---@param text string
+---@param other_paths string[]
+---@param on_done fun(err?: string)
+M.squash_file = function(root, into, path, text, other_paths, on_done)
+  local editor_args, text_path = text_editor_args(path, text)
+  local args = {
+    "squash",
+    "--from",
+    "@",
+    "--into",
+    into,
+    "--use-destination-message",
+    "--keep-emptied",
   }
+  vim.list_extend(args, editor_args)
+  vim.list_extend(args, { "--", root_file(path) })
   for _, other_path in ipairs(other_paths) do
     args[#args + 1] = root_file(other_path)
   end
@@ -291,8 +306,39 @@ M.squash_file = function(root, into, path, text, other_paths, on_done)
   end)
 end
 
+--- Restores part of the working-copy commit's changes to a file from its
+--- parents, which leaves the file with the given text.
+---@param root string
+---@param path string The file's path relative to the root.
+---@param text string
+---@param on_done fun(err?: string)
+M.restore_file = function(root, path, text, on_done)
+  local editor_args, text_path = text_editor_args(path, text)
+  local args = vim.list_extend({ "restore" }, editor_args)
+  vim.list_extend(args, { "--", root_file(path) })
+
+  run(root, args, function(result)
+    os.remove(text_path)
+    on_success(on_done)(result)
+  end)
+end
+
+--- Restores the given files of the working-copy commit from its parents,
+--- which undoes all of their changes.
+---@param root string
+---@param paths string[] The files' paths relative to the root.
+---@param on_done fun(err?: string)
+M.restore_paths = function(root, paths, on_done)
+  local args = { "restore", "--" }
+  for _, path in ipairs(paths) do
+    args[#args + 1] = root_file(path)
+  end
+  run(root, args, on_success(on_done))
+end
+
 --- Moves all of the working-copy commit's changes to the given files into
---- another revision.
+--- another revision. The working-copy commit stays, with its description, even
+--- once it's left without changes.
 ---@param root string
 ---@param into string
 ---@param paths string[] The files' paths relative to the root.
