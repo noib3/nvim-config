@@ -122,7 +122,6 @@ let
     inputs.nvim-web-devicons
     inputs.plenary-nvim
     inputs.rustaceanvim
-    inputs.toggleterm-nvim
     inputs.tokyonight-nvim
     inputs.treesitter-modules-nvim
     inputs.trouble-nvim

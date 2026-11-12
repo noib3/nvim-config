@@ -314,6 +314,7 @@ end
 ---@field expanded table<string, true?> The paths of the files whose hunks are shown.
 ---@field rows table<integer, nvim_jj.ViewRow?> The rows of the files and of their hunks' lines, keyed by their 0-based offset from the summary's row.
 ---@field summary integer The ID of the extmark on the summary's row, which follows the description.
+---@field width integer The width of the widest row from the details on, with its virtual text.
 ---@field on_drawn fun()[] The callbacks waiting for the first draw.
 ---@field timer? uv.uv_timer_t
 ---@field watcher? uv.uv_fs_event_t
@@ -362,6 +363,9 @@ M.info = function(bufnr)
   }
 end
 
+--- The placeholder of an empty subject.
+local no_description = "(no description set)"
+
 --- Draws the placeholder of an empty subject.
 ---@param bufnr integer
 local draw_placeholder = function(bufnr)
@@ -372,7 +376,7 @@ local draw_placeholder = function(bufnr)
     return
   end
   vim.api.nvim_buf_set_extmark(bufnr, placeholder_namespace, 0, 0, {
-    virt_text = { { "(no description set)", "JjPlaceholder" } },
+    virt_text = { { no_description, "JjPlaceholder" } },
     virt_text_pos = "eol",
   })
 end
@@ -414,10 +418,29 @@ local draw_files = function(bufnr, view)
   ---@type table<integer, nvim_jj.ViewRow?>
   local rows = {}
 
+  -- The separator and the padding of the gaps between hunks fill the window,
+  -- so they're left out of the width.
+  local width = 0
+  ---@param ... [string, any][]
+  local fit = function(...)
+    local row_width = 0
+    for _, chunks in ipairs({ ... }) do
+      row_width = row_width + vim.api.nvim_strwidth(text_of(chunks))
+    end
+    width = math.max(width, row_width)
+  end
+
   ---@type nvim_jj.Chunk[][]
   local header = { { { ("─"):rep(vim.o.columns), "JjSeparator" } } }
-  if view.details then vim.list_extend(header, details_lines(view.details)) end
+  if view.details then
+    for _, details_line in ipairs(details_lines(view.details)) do
+      fit(details_line)
+      header[#header + 1] = details_line
+    end
+  end
   header[#header + 1] = {}
+  -- Text at the end of a line follows it after a column.
+  fit(summary, #totals > 0 and vim.list_extend({ { " " } }, totals) or {})
   marks[#marks + 1] = {
     row = 0,
     opts = {
@@ -464,6 +487,10 @@ local draw_files = function(bufnr, view)
         virt_text_pos = "eol",
       },
     }
+    fit(
+      { { "▸ " .. status[1] .. " " .. lines[#lines] } },
+      #stats > 0 and vim.list_extend({ { " " } }, stats) or {}
+    )
 
     if expanded then
       local hunks = vim.tbl_map(
@@ -478,6 +505,7 @@ local draw_files = function(bufnr, view)
         else
           local line_row = #lines
           lines[#lines + 1] = text_of(diff_row.chunks)
+          fit({ { "  " } }, diff_row.gutter, diff_row.chunks)
           rows[line_row] = {
             file = file,
             hunk = file.hunks[diff_row.hunk],
@@ -513,6 +541,7 @@ local draw_files = function(bufnr, view)
             }
           end
           if gap then
+            fit({ { "  " } }, gap.gutter, gap.chunks)
             local gap_text = text_of(gap.chunks)
             local gutter_width = vim.api.nvim_strwidth(text_of(gap.gutter))
             local padding =
@@ -570,6 +599,7 @@ local draw_files = function(bufnr, view)
     )
   end
   view.rows = rows
+  view.width = width
 end
 
 --- Draws a view from scratch, with the description jj has.
@@ -757,6 +787,7 @@ M.buffer = function(root, id)
     expanded = {},
     rows = {},
     summary = 0,
+    width = 0,
     on_drawn = {},
   }
   views[bufnr] = view
@@ -772,7 +803,7 @@ M.buffer = function(root, id)
       local details = view.details
       if details and details.immutable then
         local subject = vim.split(details.description, "\n")[1] or ""
-        if subject == "" then subject = "(no description set)" end
+        if subject == "" then subject = no_description end
         local label = ("%s%s %s"):format(details.prefix, details.rest, subject)
         return vim.notify(
           jj.immutable_error(label),
@@ -850,16 +881,56 @@ end
 M.edit_description = function(bufnr, description)
   local view = views[bufnr]
   if not view then return end
-  local edit = function()
+  M.when_drawn(bufnr, function()
     if views[bufnr] ~= view or not vim.api.nvim_buf_is_valid(bufnr) then
       return
     end
     local lines = vim.split(vim.trim(description), "\n", { plain = true })
     vim.api.nvim_buf_set_lines(bufnr, 0, summary_row(bufnr, view), false, lines)
     draw_placeholder(bufnr)
+  end)
+end
+
+--- Calls a function once a view is drawn, right away if it already is.
+---@param bufnr integer
+---@param callback fun()
+M.when_drawn = function(bufnr, callback)
+  local view = views[bufnr]
+  if not view then return end
+  if view.details then return callback() end
+  table.insert(view.on_drawn, callback)
+end
+
+--- Returns the size of a view's text without wrapping: the width of its
+--- widest row, with its virtual text, and its number of rows, with its
+--- virtual lines.
+---@param bufnr integer
+---@return integer width
+---@return integer height
+M.size = function(bufnr)
+  local view = assert(views[bufnr])
+  local width = view.width
+  local description =
+    vim.api.nvim_buf_get_lines(bufnr, 0, summary_row(bufnr, view), false)
+  for _, line in ipairs(description) do
+    width = math.max(width, vim.api.nvim_strwidth(line))
   end
-  if view.details then return edit() end
-  table.insert(view.on_drawn, edit)
+  if (description[1] or "") == "" then
+    width = math.max(width, 1 + vim.api.nvim_strwidth(no_description))
+  end
+
+  local height = vim.api.nvim_buf_line_count(bufnr)
+  local marks = vim.api.nvim_buf_get_extmarks(
+    bufnr,
+    namespace,
+    0,
+    -1,
+    { details = true, type = "virt_lines" }
+  )
+  for _, mark in ipairs(marks) do
+    height = height + #(assert(mark[4]).virt_lines or {})
+  end
+  return width, height
 end
 
 --- Sets the options of a window showing a change. The delimiters of the
@@ -890,117 +961,6 @@ M.is_view = function(bufnr) return views[bufnr] ~= nil end
 M.is_description_row = function(bufnr, row)
   local view = views[bufnr]
   return view ~= nil and row < summary_row(bufnr, view)
-end
-
----@class nvim_jj.Recap
----@field lines string[]
----@field highlights { row: integer, col: integer, end_col: integer, hl_group: string }[]
-
---- Returns the recap of a change shown on hover, laid out like the top of its
---- view: its description, a separator, its details, the summary of its
---- files, and their rows.
----@param root string
----@param id string
----@param on_done fun(err?: string, recap?: nvim_jj.Recap)
-M.recap = function(root, id, on_done)
-  jj.details(root, id, function(err, details)
-    if err or not details then return on_done(err) end
-    jj.diff(root, id, function(diff_err, diff)
-      if diff_err or not diff then return on_done(diff_err) end
-      local files = M.parse_diff(diff)
-
-      ---@type nvim_jj.Chunk[][]
-      local chunk_lines = {}
-      local description = vim.trim(details.description)
-      if description == "" then
-        chunk_lines[1] = { { "(no description set)", "JjPlaceholder" } }
-      else
-        for _, line in ipairs(vim.split(description, "\n", { plain = true })) do
-          chunk_lines[#chunk_lines + 1] = { { line } }
-        end
-      end
-      local separator = #chunk_lines + 1
-      chunk_lines[separator] = {}
-      vim.list_extend(chunk_lines, details_lines(details))
-      chunk_lines[#chunk_lines + 1] = {}
-      local summary, totals = M.summarize(files)
-      if #totals > 0 then
-        vim.list_extend(summary, vim.list_extend({ { " " } }, totals))
-      end
-      chunk_lines[#chunk_lines + 1] = summary
-      for _, file in ipairs(files) do
-        local status = statuses[file.status]
-        local row = { { status[1], status[2] }, { " " .. file_text(file) } }
-        local stats = file_stats(file)
-        if #stats > 0 then
-          vim.list_extend(row, vim.list_extend({ { " " } }, stats))
-        end
-        chunk_lines[#chunk_lines + 1] = row
-      end
-
-      local width = 0
-      for _, chunks in ipairs(chunk_lines) do
-        width = math.max(width, vim.api.nvim_strwidth(text_of(chunks)))
-      end
-      chunk_lines[separator] = { { ("─"):rep(width), "JjSeparator" } }
-
-      ---@type nvim_jj.Recap
-      local recap = { lines = {}, highlights = {} }
-      for row, chunks in ipairs(chunk_lines) do
-        recap.lines[row] = text_of(chunks)
-        for _, highlight in ipairs(chunk_highlights(chunks, 0)) do
-          recap.highlights[#recap.highlights + 1] = {
-            row = row - 1,
-            col = highlight.col,
-            end_col = highlight.end_col,
-            hl_group = highlight.hl_group,
-          }
-        end
-      end
-      on_done(nil, recap)
-    end)
-  end)
-end
-
---- Draws a recap's highlights in a buffer showing its lines, and highlights
---- and conceals the subject's markdown like the view does. The window gets a
---- column of padding on each side.
----@param bufnr integer
----@param win integer
----@param recap nvim_jj.Recap
-M.decorate = function(bufnr, win, recap)
-  vim.api.nvim_buf_clear_namespace(bufnr, namespace, 0, -1)
-  for _, highlight in ipairs(recap.highlights) do
-    vim.api.nvim_buf_set_extmark(
-      bufnr,
-      namespace,
-      highlight.row,
-      highlight.col,
-      {
-        end_col = highlight.end_col,
-        hl_group = highlight.hl_group,
-      }
-    )
-  end
-  local markup = M.markup(recap.lines[1] or "")
-  for _, highlight in ipairs(markup.highlights) do
-    vim.api.nvim_buf_set_extmark(bufnr, namespace, 0, highlight.start, {
-      end_col = highlight.finish,
-      hl_group = highlight.hl_group,
-    })
-  end
-  for _, conceal in ipairs(markup.conceals) do
-    vim.api.nvim_buf_set_extmark(bufnr, namespace, 0, conceal.start, {
-      end_col = conceal.finish,
-      conceal = conceal.text,
-    })
-  end
-  vim.wo[win].conceallevel = 2
-  vim.wo[win].concealcursor = "n"
-  vim.api.nvim_win_set_config(
-    win,
-    { border = { "", "", "", " ", "", "", "", " " } }
-  )
 end
 
 --- Sets the default colors of the views. Their diffs take nvim-hunks'

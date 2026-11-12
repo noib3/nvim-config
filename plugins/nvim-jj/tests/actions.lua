@@ -111,7 +111,7 @@ test(
     local descriptions = recording("Description", "description")
     local root = h.repo({ "one", "two\n\nOld body." })
     local log = h.open(root)
-    nvim_jj.open_change(log, h.row(log, "two"), "here")
+    nvim_jj.open_change(log, h.row(log, "two"), "float")
     local view = vim.api.nvim_get_current_buf()
     h.wait(
       function() return #code_actions(view, 1) > 0 end,

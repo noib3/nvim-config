@@ -16,7 +16,13 @@ local on_attach = function(client, bufnr)
 
   -- Display infos about the symbol under the cursor in a floating window.
   if client:supports_method("textDocument/hover") then
-    keymap.set("n", "K", vim.lsp.buf.hover, opts)
+    keymap.set("n", "K", function()
+      vim.lsp.buf.hover({
+        -- nvim-jj opens the hover window itself and sends an empty response
+        -- which would cause a "No information available" message to be sent.
+        silent = client.name == "nvim-jj",
+      })
+    end, opts)
   end
 
   -- Rename the symbol under the cursor.

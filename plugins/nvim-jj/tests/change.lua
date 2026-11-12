@@ -56,7 +56,7 @@ end
 --- drawn.
 ---@param bufnr integer
 ---@param subject string
----@param where "here"|"above"|"below"|"left"|"right"
+---@param where "right"|"float"
 ---@return integer view
 local open = function(bufnr, subject, where)
   h.messages = {}
@@ -126,34 +126,48 @@ local decorations = function(view, line)
   return result
 end
 
-test("the change is viewed instead of the log until it's quit", function()
-  local _, bufnr = repo()
-  local windows = #vim.api.nvim_tabpage_list_wins(0)
+test(
+  "the change is viewed in a centered float over a backdrop until it's quit",
+  function()
+    local _, bufnr = repo()
+    local windows = #vim.api.nvim_tabpage_list_wins(0)
 
-  local view = open(bufnr, "work", "here")
-  h.eq(lines_of(view), {
-    "work",
-    "4 files changed: 1 added, 1 deleted, 1 modified, 1 renamed,",
-    "gone.txt",
-    "long.txt",
-    "new.txt",
-    "ren.txt → renamed.txt",
-  })
-  h.eq(#vim.api.nvim_tabpage_list_wins(0), windows)
+    local view = open(bufnr, "work", "float")
+    h.eq(lines_of(view), {
+      "work",
+      "4 files changed: 1 added, 1 deleted, 1 modified, 1 renamed,",
+      "gone.txt",
+      "long.txt",
+      "new.txt",
+      "ren.txt → renamed.txt",
+    })
+    local config = vim.api.nvim_win_get_config(0)
+    h.eq(config.relative, "editor")
+    h.eq(config.width, math.floor(vim.o.columns * 0.8 + 0.5))
+    h.eq(config.border, { "", "", "", " ", "", "", "", " " })
+    h.eq(vim.wo.winhighlight, "NormalFloat:Normal,FloatBorder:Normal")
+    local backdrops = vim.tbl_filter(
+      function(win) return vim.wo[win].winhighlight == "Normal:JjBackdrop" end,
+      vim.api.nvim_tabpage_list_wins(0)
+    )
+    h.eq(#backdrops, 1)
+    h.eq(vim.api.nvim_win_get_config(assert(backdrops[1])).width, vim.o.columns)
+    h.eq(#vim.api.nvim_tabpage_list_wins(0), windows + 2)
 
-  press("q")
-  h.wait(
-    function() return vim.api.nvim_get_current_buf() == bufnr end,
-    "the log is back"
-  )
-  h.eq(#vim.api.nvim_tabpage_list_wins(0), windows)
-end)
+    press("q")
+    h.wait(
+      function() return #vim.api.nvim_tabpage_list_wins(0) == windows end,
+      "the float and its backdrop are closed"
+    )
+    h.eq(vim.api.nvim_get_current_buf(), bufnr)
+  end
+)
 
 test(
   "a file's hunks show their line numbers and the lines between them",
   function()
     local _, bufnr = repo()
-    local view = open(bufnr, "work", "here")
+    local view = open(bufnr, "work", "float")
 
     vim.api.nvim_win_set_cursor(0, { line_of(view, "long.txt"), 0 })
     press("<CR>")
@@ -222,7 +236,7 @@ test(
 
 test("]] and [[ move between the hunks of the expanded files", function()
   local _, bufnr = repo()
-  local view = open(bufnr, "work", "here")
+  local view = open(bufnr, "work", "float")
   for _, path in ipairs({ "gone.txt", "long.txt", "new.txt" }) do
     vim.api.nvim_win_set_cursor(0, { line_of(view, path), 0 })
     press("<CR>")
@@ -242,7 +256,7 @@ end)
 
 test("writing the view describes the change", function()
   local root, bufnr = repo()
-  local view = open(bufnr, "work", "here")
+  local view = open(bufnr, "work", "float")
 
   vim.api.nvim_buf_set_lines(view, 0, 1, false, { "subject", "", "body" })
   vim.cmd.write()
@@ -264,16 +278,16 @@ end)
 
 test("the description's markdown is concealed away from the cursor", function()
   local _, bufnr = repo()
-  local view = open(bufnr, "work", "here")
+  local view = open(bufnr, "work", "right")
   local win = vim.api.nvim_get_current_win()
   vim.api.nvim_buf_set_lines(view, 0, 1, false, { "work", "", "some `code`" })
   vim.api.nvim_win_set_cursor(win, { 1, 0 })
   vim.cmd.redraw()
 
-  local row = vim.fn.screenpos(win, 3, 1).row
+  local pos = vim.fn.screenpos(win, 3, 1)
   local chars = {}
-  for screen_col = 1, vim.api.nvim_win_get_width(win) do
-    chars[#chars + 1] = vim.fn.screenstring(row, screen_col)
+  for offset = 0, vim.api.nvim_win_get_width(win) - 1 do
+    chars[#chars + 1] = vim.fn.screenstring(pos.row, pos.col + offset)
   end
   h.eq(vim.trim(table.concat(chars)), "some code")
   vim.cmd("quit!")
@@ -297,7 +311,7 @@ end)
 
 test("the details follow a separator after the description", function()
   local _, bufnr = repo()
-  local view = open(bufnr, "work", "here")
+  local view = open(bufnr, "work", "float")
   local above = decorations(view, 2).above
   h.eq((assert(above[1]):gsub("─", "")), "")
   h.eq(assert(above[3]):match("^%d%d%d%d%-%d%d%-%d%d ") ~= nil, true, above[3])
@@ -305,67 +319,83 @@ test("the details follow a separator after the description", function()
   vim.cmd("quit!")
 end)
 
-test(
-  "hovering a change recaps it like its view, with its highlights",
-  function()
-    local _, bufnr = repo()
-    vim.api.nvim_win_set_cursor(0, { h.row(bufnr, "work"), 0 })
-    vim.lsp.buf.hover()
-    h.wait(function()
-      local win = vim.b[bufnr].lsp_floating_preview
-      return win ~= nil and vim.api.nvim_win_is_valid(win)
-    end, "the hover is shown")
-    local win = vim.b[bufnr].lsp_floating_preview
-    local float = vim.api.nvim_win_get_buf(win)
-    h.eq(
-      vim.api.nvim_win_get_config(win).border,
-      { "", "", "", " ", "", "", "", " " }
-    )
-    local lines = vim.api.nvim_buf_get_lines(float, 0, -1, false)
-    h.eq(lines[1], "work")
-    h.eq((assert(lines[2]):gsub("─", "")), "")
-    h.eq(vim.list_slice(lines, 5), {
-      "test <test@example.com>",
-      "",
-      "4 files changed: 1 added, 1 deleted, 1 modified, 1 renamed, +3 -3",
-      "D gone.txt -1",
-      "M long.txt +2 -2",
-      "A new.txt +1",
-      "R ren.txt → renamed.txt",
-    })
-
-    local namespace = vim.api.nvim_create_namespace("nvim-jj-change")
-    local groups = {}
-    for _, mark in
-      ipairs(
-        vim.api.nvim_buf_get_extmarks(
-          float,
-          namespace,
-          0,
-          -1,
-          { details = true }
-        )
-      )
-    do
-      groups[assert(mark[4]).hl_group] = true
+--- Returns the float showing a change's view, if there's one.
+---@return integer?
+local change_float = function()
+  for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+    local name = vim.api.nvim_buf_get_name(vim.api.nvim_win_get_buf(win))
+    if
+      vim.fn.win_gettype(win) == "popup"
+      and vim.startswith(name, "jj-change://")
+    then
+      return win
     end
-    for _, group in ipairs({
-      "JjSeparator",
-      "JjChangeId",
-      "JjAuthor",
-      "JjAddedFiles",
-      "JjAddedCount",
-    }) do
-      h.eq(groups[group], true, group)
-    end
-    vim.api.nvim_win_close(win, true)
   end
-)
+end
+
+test("hovering a change shows its view in a float fitting it", function()
+  local _, bufnr = repo()
+  -- The hover fits in the space above or below the cursor in the log.
+  vim.api.nvim_win_set_config(0, { height = vim.o.lines - 4 })
+  vim.api.nvim_win_set_cursor(0, { h.row(bufnr, "work"), 0 })
+  local log_win = vim.api.nvim_get_current_win()
+  h.messages = {}
+  vim.lsp.buf.hover({ silent = true })
+  h.wait(
+    function() return change_float() ~= nil end,
+    "the view is shown in the hover"
+  )
+  local win = assert(change_float())
+  local view = vim.api.nvim_win_get_buf(win)
+  h.eq(vim.api.nvim_get_current_win(), log_win)
+  h.eq(lines_of(view)[1], "work")
+  h.eq(
+    vim.api.nvim_win_get_config(win).border,
+    { "", "", "", " ", "", "", "", " " }
+  )
+  h.eq(
+    vim.api.nvim_win_get_height(win),
+    vim.api.nvim_win_text_height(win, {}).all
+  )
+  -- The totals follow the summary.
+  local summary =
+    "4 files changed: 1 added, 1 deleted, 1 modified, 1 renamed, +3 -3"
+  h.eq(vim.api.nvim_win_get_width(win) >= #summary, true)
+
+  -- Hovering again focuses the view, which stays open, and hovering in it
+  -- goes back to the log.
+  vim.lsp.buf.hover({ silent = true })
+  h.wait(
+    function() return vim.api.nvim_get_current_win() == win end,
+    "the hover is focused"
+  )
+  vim.wait(50)
+  h.eq(vim.api.nvim_win_is_valid(win), true)
+  h.wait(
+    function() return #vim.lsp.get_clients({ bufnr = view }) > 0 end,
+    "the view's language server is attached"
+  )
+  vim.lsp.buf.hover({ silent = true })
+  h.wait(
+    function() return vim.api.nvim_get_current_win() == log_win end,
+    "the log is focused again"
+  )
+  h.eq(h.messages, {})
+
+  -- Moving in the log closes it.
+  vim.api.nvim_win_set_cursor(0, { 1, 0 })
+  vim.api.nvim_exec_autocmds("CursorMoved", { buffer = bufnr })
+  h.wait(
+    function() return not vim.api.nvim_win_is_valid(win) end,
+    "the hover is closed"
+  )
+  h.eq(vim.api.nvim_buf_is_valid(view), false)
+end)
 
 test("writing an immutable change's view is an error", function()
   local root = h.repo({ "one" }, 1)
   local bufnr = h.open(root)
-  local view = open(bufnr, "one", "here")
+  local view = open(bufnr, "one", "float")
 
   h.messages = {}
   vim.api.nvim_buf_set_lines(view, 0, 1, false, { "uno" })

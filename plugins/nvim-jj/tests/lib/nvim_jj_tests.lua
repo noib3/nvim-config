@@ -135,6 +135,12 @@ end
 ---@param root string
 ---@return integer bufnr
 M.open = function(root)
+  -- The floats go first, since the last window that isn't one can't close.
+  for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+    if vim.fn.win_gettype(win) == "popup" then
+      vim.api.nvim_win_close(win, true)
+    end
+  end
   for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
     if win ~= vim.api.nvim_get_current_win() then
       vim.api.nvim_win_close(win, true)

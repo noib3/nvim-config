@@ -143,10 +143,6 @@
       url = "github:mrcjkb/rustaceanvim";
       flake = false;
     };
-    toggleterm-nvim = {
-      url = "github:akinsho/toggleterm.nvim";
-      flake = false;
-    };
     tokyonight-nvim = {
       url = "github:folke/tokyonight.nvim";
       flake = false;

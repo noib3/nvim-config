@@ -1,4 +1,5 @@
 return {
+  backdrop = require("utils.backdrop"),
   buffer = require("utils.buffer"),
   fs = require("utils.fs"),
   highlights = require("utils.highlights"),

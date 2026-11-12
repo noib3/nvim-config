@@ -30,7 +30,81 @@ local wait_for = function(fn)
   h.settle()
 end
 
-test("fetching offers to move the working copy onto the new trunk", function()
+--- Returns the text of the float at the top right of a log buffer's window,
+--- on the separator from the window above, or nothing if there's none.
+---@param bufnr integer
+---@return string?
+local remotes_float = function(bufnr)
+  local win = vim.fn.bufwinid(bufnr)
+  for _, float in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+    local config = vim.api.nvim_win_get_config(float)
+    if config.relative == "win" and config.win == win then
+      h.eq(config.row, -1)
+      h.eq(config.col, vim.api.nvim_win_get_width(win))
+      local buf = vim.api.nvim_win_get_buf(float)
+      return vim.trim(vim.api.nvim_buf_get_lines(buf, 0, 1, false)[1] or "")
+    end
+  end
+end
+
+test("a float over the log lists the remotes, the pushed one last", function()
+  local root = h.repo({ "one" }, 1)
+  for name, url in pairs({
+    upstream = "git@github.com:o/r.git",
+    backup = "https://user@gitlab.com/x/y.git",
+  }) do
+    h.run(root, { "jj", "git", "remote", "add", name, url })
+  end
+  local bufnr = h.open(root)
+
+  local origin = vim.fn.fnamemodify(
+    vim.fs.joinpath(vim.fs.dirname(root), "remote.git"),
+    ":~"
+  )
+  h.eq(
+    remotes_float(bufnr),
+    ("gitlab.com/x/y backup   \239\144\136  o/r upstream   %s origin"):format(
+      origin
+    )
+  )
+  h.eq(vim.wo[vim.fn.bufwinid(bufnr)].winbar, "")
+
+  nvim_jj.toggle(root)
+  h.wait(
+    function() return #vim.api.nvim_tabpage_list_wins(0) == 1 end,
+    "the float closes with the log"
+  )
+end)
+
+test("the pushed remote is jj's, read again when the log is entered", function()
+  local root = h.repo({ "one" }, 1)
+  h.run(root, { "jj", "git", "remote", "add", "upstream", "../remote.git" })
+  h.run(root, { "jj", "config", "set", "--repo", "git.push", "upstream" })
+  local bufnr = h.open(root)
+  h.eq(vim.endswith(assert(remotes_float(bufnr)), " upstream"), true)
+
+  h.run(root, { "jj", "config", "set", "--repo", "git.push", "origin" })
+  vim.cmd.wincmd("p")
+  vim.cmd.wincmd("p")
+  h.wait(
+    function() return vim.endswith(assert(remotes_float(bufnr)), " origin") end,
+    "the pushed remote is read again"
+  )
+end)
+
+test("fetching draws its progress and outcome before the remotes", function()
+  local root = h.repo({ "one" }, 1)
+  local bufnr = h.open(root)
+  local remotes = assert(remotes_float(bufnr))
+
+  local done = false
+  nvim_jj.fetch(bufnr, function() done = true end)
+  h.eq(vim.endswith(remotes_float(bufnr), " Fetching  " .. remotes), true)
+  h.wait(function() return done end, "the fetch is done")
+  h.eq(remotes_float(bufnr), ("\239\144\174  Up to date  %s"):format(remotes))
+end)
+
+test("fetching draws the updated bookmarks and moves no change", function()
   local root = h.repo({ "one" }, 1)
   h.run(root, { "jj", "describe", "--quiet", "-m", "mine" })
 
@@ -47,19 +121,14 @@ test("fetching offers to move the working copy onto the new trunk", function()
   h.run(other, { "jj", "git", "push", "--quiet", "--bookmark", "main" })
 
   local bufnr = h.open(root)
-  local select = vim.ui.select
-  ---@type string?
-  local prompt
-  ---@diagnostic disable-next-line: duplicate-set-field
-  vim.ui.select = function(items, opts, on_choice)
-    prompt = opts.prompt
-    on_choice(items[1])
-  end
   wait_for(function(on_done) nvim_jj.fetch(bufnr, on_done) end)
-  vim.ui.select = select
 
-  h.eq(prompt, "main moved, and 1 change aren't on top of it")
-  h.eq(h.query(root, "@-", "description.first_line()"), { "theirs" })
+  h.eq(h.query(root, "@-", "description.first_line()"), { "one" })
+  h.eq(h.query(root, "main", "description.first_line()"), { "theirs" })
+  h.eq(
+    vim.startswith(assert(remotes_float(bufnr)), "\239\144\174  Updated main  "),
+    true
+  )
 end)
 
 --- Creates a repo whose `feature` bookmark is pushed on top of `main`, with

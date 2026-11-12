@@ -630,27 +630,58 @@ M.edit = function(root, rev, on_done)
   run(root, { "edit", rev }, on_success(on_done))
 end
 
---- Fetches the bookmarks of a remote.
+---@class nvim_jj.FetchedBookmark
+---@field name string
+---@field kind "new"|"updated"|"deleted"
+
+--- Fetches the bookmarks of the remotes that `jj git fetch` fetches from by
+--- default, and calls back with the ones that changed.
 ---@param root string
----@param remote string
----@param on_done fun(err?: string)
-M.fetch = function(root, remote, on_done)
-  run(root, { "git", "fetch", "--remote", remote }, on_success(on_done))
+---@param on_done fun(err?: string, bookmarks?: nvim_jj.FetchedBookmark[])
+M.fetch = function(root, on_done)
+  run(root, { "git", "fetch" }, function(result)
+    if result.code ~= 0 then return on_done(vim.trim(result.stderr or "")) end
+    ---@type nvim_jj.FetchedBookmark[]
+    local bookmarks = {}
+    for name, kind in
+      (result.stderr or ""):gmatch("bookmark: (%S+)@%S+ %[(%a+)%]")
+    do
+      bookmarks[#bookmarks + 1] = { name = name, kind = kind }
+    end
+    on_done(nil, bookmarks)
+  end)
 end
 
---- Returns the URL of a git remote, without snapshotting the working copy.
+---@class nvim_jj.Remote
+---@field name string
+---@field url string
+
+--- Returns the git remotes of a repo, and the name of the one `jj git push`
+--- pushes to by default, if any: the `git.push` setting, or else the only
+--- remote, or else `origin`. The working copy isn't snapshotted.
 ---@param root string
----@param remote string
----@param on_done fun(err?: string, url?: string)
-M.remote_url = function(root, remote, on_done)
+---@param on_done fun(err?: string, remotes?: nvim_jj.Remote[], push?: string)
+M.remotes = function(root, on_done)
   local args = { "--ignore-working-copy", "git", "remote", "list" }
   run(root, args, function(result)
     if result.code ~= 0 then return on_done(vim.trim(result.stderr or "")) end
+    ---@type nvim_jj.Remote[]
+    local remotes = {}
     for line in (result.stdout or ""):gmatch("[^\n]+") do
       local name, url = line:match("^(%S+)%s+(%S+)")
-      if name == remote then return on_done(nil, url) end
+      if name then remotes[#remotes + 1] = { name = name, url = url } end
     end
-    on_done(("There's no remote named %s"):format(remote))
+
+    local config_args = { "--ignore-working-copy", "config", "get", "git.push" }
+    run(root, config_args, function(config_result)
+      local push = config_result.code == 0
+          and vim.trim(config_result.stdout or "")
+        or ""
+      if push == "" then
+        push = #remotes == 1 and remotes[1].name or "origin"
+      end
+      on_done(nil, remotes, #remotes > 0 and push or nil)
+    end)
   end)
 end
 

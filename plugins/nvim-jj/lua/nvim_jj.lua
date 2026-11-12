@@ -24,7 +24,6 @@ local code_namespace = vim.api.nvim_create_namespace("nvim-jj-code")
 ---@field gh string The GitHub CLI's executable.
 ---@field height integer The height of the log's window.
 ---@field lookahead integer The number of changes loaded past the last one in view.
----@field remote string The git remote that changes are pushed to.
 ---@field revset string The revisions in the log.
 
 ---@type nvim_jj.Config
@@ -32,7 +31,6 @@ local config = {
   gh = "gh",
   height = 14,
   lookahead = 200,
-  remote = "origin",
   revset = "::(@ | trunk() | mutable())",
 }
 
@@ -56,11 +54,15 @@ local config = {
 ---@field copied table<string, true?> The IDs of the copied changes.
 ---@field unpadded? integer The line whose pad was emptied for insert mode.
 ---@field statuses table<string, nvim_jj.Status?> The statuses of the operations on changes, keyed by change ID.
----@field views integer[] The buffers of the changes viewed in splits next to the log.
+---@field views integer[] The buffers of the changes viewed in splits or floats next to the log.
+---@field remotes? nvim_jj.Remote[] The git remotes of the repo, once they're read.
+---@field remote? string The name of the git remote that changes are pushed to, once the remotes are read, if there's any.
+---@field fetch? nvim_jj.Status The status of the fetch in progress or just finished.
 ---@field github_repo? string The `owner/name` of the remote's GitHub repo, if it's on GitHub.
 ---@field pull_requests table<string, nvim_jj.PullRequest?> The open pull requests of the remote's GitHub repo, keyed by their bookmark.
 ---@field pull_requests_version integer The number of changes to the pull requests made since the log was created.
 ---@field load? nvim_jj.Load The read of jj's log in progress.
+---@field to_working_copy? true Whether the cursors move to the working-copy commit on the next redraw.
 ---@field on_drawn fun()[] The callbacks waiting for the next redraw.
 ---@field timer? uv.uv_timer_t
 ---@field watcher? uv.uv_fs_event_t
@@ -224,6 +226,19 @@ local shows_placeholder = function(bufnr, line, text)
     or vim.fn.line(".") ~= line + 1
 end
 
+--- Returns the chunk of virtual text drawing an operation's status: its icon,
+--- then its text.
+---@param status nvim_jj.Status
+---@return [string, string]
+local status_chunk = function(status)
+  local icon = status.kind == "busy" and spinner_frames[spinner.frame]
+    or status_icons[status.kind]
+  return {
+    ("%s %s "):format(icon, status.text),
+    "JjStatus" .. status.kind:sub(1, 1):upper() .. status.kind:sub(2),
+  }
+end
+
 --- Draws what follows a row's subject: the change's bookmarks and markers.
 --- An empty subject shows a placeholder before them, drawn over the line so
 --- that the cursor rests on its first character.
@@ -256,14 +271,7 @@ local draw_right = function(bufnr, row, line, text)
     chunks[#chunks + 1] = { "(conflict) ", "JjConflict" }
   end
   local status = log and log.statuses[change.id]
-  if status then
-    local icon = status.kind == "busy" and spinner_frames[spinner.frame]
-      or status_icons[status.kind]
-    chunks[#chunks + 1] = {
-      ("%s %s "):format(icon, status.text),
-      "JjStatus" .. status.kind:sub(1, 1):upper() .. status.kind:sub(2),
-    }
-  end
+  if status then chunks[#chunks + 1] = status_chunk(status) end
 
   local marks = assert(row.marks)
   marks.right = vim.api.nvim_buf_set_extmark(bufnr, namespace, line, 0, {
@@ -306,11 +314,163 @@ local redraw_right = function(bufnr, id)
   end
 end
 
---- Returns whether any operation on the changes of the log buffers is in
---- progress.
+--- Returns where a git remote's URL points to: a GitHub repo's `owner/name`
+--- after the GitHub logo, a host followed by a path, or a local path.
+---@param url string
+---@return string
+local remote_location = function(url)
+  local repo = github.repo_of(url)
+  if repo then return github_icon .. " " .. repo end
+  local path = url:match("^file://(.*)$")
+  if path then return vim.fn.fnamemodify(path, ":~") end
+  local rest = url:match("^%a[%w+.-]*://(.*)$")
+  if not rest then
+    -- An scp-like URL, `user@host:path`, has a colon before any slash.
+    local host, host_path = url:match("^([^/]+):(.*)$")
+    if not host then return vim.fn.fnamemodify(url, ":~") end
+    rest = host .. "/" .. host_path
+  end
+  return (rest:gsub("^[^@/]+@", ""):gsub("%.git$", ""))
+end
+
+--- Returns the chunks drawing a log's remotes: the status of the last fetch,
+--- then each remote's location followed by its name, ending with the remote
+--- that changes are fetched from and pushed to.
+---@param log nvim_jj.Log
+---@return [string, string][]
+local remote_chunks = function(log)
+  ---@type [string, string][]
+  local chunks = {}
+  if log.fetch then
+    local chunk = status_chunk(log.fetch)
+    chunks[#chunks + 1] = { chunk[1] .. " ", chunk[2] }
+  end
+  local remotes = vim.tbl_filter(
+    function(remote) return remote.name ~= log.remote end,
+    log.remotes or {}
+  )
+  vim.list_extend(
+    remotes,
+    vim.tbl_filter(
+      function(remote) return remote.name == log.remote end,
+      log.remotes or {}
+    )
+  )
+  for index, remote in ipairs(remotes) do
+    chunks[#chunks + 1] = { remote_location(remote.url) .. " ", "JjRemoteUrl" }
+    local name_hl = remote.name == log.remote and "JjRemote" or "JjRemoteUrl"
+    local separator = index < #remotes and "   " or " "
+    chunks[#chunks + 1] = { remote.name .. separator, name_hl }
+  end
+  return chunks
+end
+
+--- The floats drawing the remotes of the log buffers at the top right of
+--- their windows, keyed by window.
+---@type table<integer, integer?>
+local remote_floats = {}
+
+local remotes_namespace = vim.api.nvim_create_namespace("nvim-jj-remotes")
+
+--- Closes the float drawing the remotes in a window, if any.
+---@param win integer
+local close_remote_float = function(win)
+  local float = remote_floats[win]
+  remote_floats[win] = nil
+  if float and vim.api.nvim_win_is_valid(float) then
+    vim.api.nvim_win_close(float, true)
+  end
+end
+
+--- Draws chunks in a float at the top right of a window, over the separator
+--- from the window above it, or else over the window's first line. Without
+--- chunks, the float is closed.
+---@param win integer
+---@param chunks [string, string][]
+local draw_remote_float = function(win, chunks)
+  if #chunks == 0 then return close_remote_float(win) end
+
+  local text = " "
+  ---@type { start: integer, finish: integer, hl: string }[]
+  local highlights = {}
+  for _, chunk in ipairs(chunks) do
+    highlights[#highlights + 1] =
+      { start = #text, finish = #text + #chunk[1], hl = chunk[2] }
+    text = text .. chunk[1]
+  end
+
+  local float = remote_floats[win]
+  if float and not vim.api.nvim_win_is_valid(float) then float = nil end
+  local buf = float and vim.api.nvim_win_get_buf(float)
+    or vim.api.nvim_create_buf(false, true)
+  vim.bo[buf].bufhidden = "wipe"
+  vim.api.nvim_buf_set_lines(buf, 0, -1, false, { text })
+  vim.api.nvim_buf_clear_namespace(buf, remotes_namespace, 0, -1)
+  for _, highlight in ipairs(highlights) do
+    vim.api.nvim_buf_set_extmark(buf, remotes_namespace, 0, highlight.start, {
+      end_col = highlight.finish,
+      hl_group = highlight.hl,
+    })
+  end
+
+  local below_window = vim.api.nvim_win_call(
+    win,
+    function() return vim.fn.winnr("k") ~= vim.fn.winnr() end
+  )
+  ---@type vim.api.keyset.win_config
+  local layout = {
+    relative = "win",
+    win = win,
+    anchor = "NE",
+    row = below_window and -1 or 0,
+    col = vim.api.nvim_win_get_width(win),
+    width = math.min(
+      vim.api.nvim_strwidth(text),
+      vim.api.nvim_win_get_width(win)
+    ),
+    height = 1,
+  }
+  if float then return vim.api.nvim_win_set_config(float, layout) end
+  float = vim.api.nvim_open_win(
+    buf,
+    false,
+    vim.tbl_extend("force", layout, {
+      focusable = false,
+      style = "minimal",
+      -- The backdrop of the centered floats goes over it.
+      zindex = 40,
+      noautocmd = true,
+    })
+  )
+  vim.wo[float].wrap = false
+  remote_floats[win] = float
+end
+
+--- Draws the remotes of the log buffers at the top right of their windows in
+--- the current tab page, and closes the floats of the windows that don't
+--- show a log anymore.
+local draw_remotes = function()
+  for win in pairs(remote_floats) do
+    if
+      not vim.api.nvim_win_is_valid(win)
+      or not logs[vim.api.nvim_win_get_buf(win)]
+    then
+      close_remote_float(win)
+    end
+  end
+  for _, win in ipairs(vim.api.nvim_tabpage_list_wins(0)) do
+    local log = logs[vim.api.nvim_win_get_buf(win)]
+    if log and vim.api.nvim_win_get_config(win).relative == "" then
+      draw_remote_float(win, remote_chunks(log))
+    end
+  end
+end
+
+--- Returns whether any operation of the log buffers is in progress.
 ---@return boolean
 local any_busy = function()
   for _, log in pairs(logs) do
+    if log.fetch and log.fetch.kind == "busy" then return true end
     for _, status in pairs(log.statuses) do
       if status.kind == "busy" then return true end
     end
@@ -336,11 +496,14 @@ local update_spinner = function()
     spinner_interval_ms,
     vim.schedule_wrap(function()
       spinner.frame = spinner.frame % #spinner_frames + 1
+      local fetching = false
       for bufnr, log in pairs(logs) do
+        fetching = fetching or (log.fetch and log.fetch.kind == "busy")
         for id, status in pairs(log.statuses) do
           if status.kind == "busy" then redraw_right(bufnr, id) end
         end
       end
+      if fetching then draw_remotes() end
     end)
   )
 end
@@ -352,6 +515,37 @@ local single_line = function(text)
   return (vim.trim(text):gsub(":\n", ": "):gsub("\n", ", "))
 end
 
+--- Stops the timer clearing a finished operation's status.
+---@param status? nvim_jj.Status
+local stop_expiry = function(status)
+  if status and status.timer and not status.timer:is_closing() then
+    status.timer:close()
+  end
+end
+
+--- Returns the status of an operation. A finished operation's status expires
+--- after a while.
+---@param kind nvim_jj.StatusKind
+---@param text string
+---@param on_expired fun(status: nvim_jj.Status)
+---@return nvim_jj.Status
+local new_status = function(kind, text, on_expired)
+  ---@type nvim_jj.Status
+  local status = { kind = kind, text = single_line(text) }
+  if kind == "busy" then return status end
+  local timer = assert(uv.new_timer())
+  status.timer = timer
+  timer:start(
+    status_durations_ms[kind],
+    0,
+    vim.schedule_wrap(function()
+      if not timer:is_closing() then timer:close() end
+      on_expired(status)
+    end)
+  )
+  return status
+end
+
 --- Draws the status of an operation on a change of a log buffer. A finished
 --- operation's status is cleared after a while.
 ---@param bufnr integer
@@ -361,30 +555,31 @@ end
 local set_status = function(bufnr, id, kind, text)
   local log = logs[bufnr]
   if not log then return end
-
-  local previous = log.statuses[id]
-  if previous and previous.timer and not previous.timer:is_closing() then
-    previous.timer:close()
-  end
-
-  ---@type nvim_jj.Status
-  local status = { kind = kind, text = single_line(text) }
-  log.statuses[id] = status
-  if kind ~= "busy" then
-    local timer = assert(uv.new_timer())
-    status.timer = timer
-    timer:start(
-      status_durations_ms[kind],
-      0,
-      vim.schedule_wrap(function()
-        if not timer:is_closing() then timer:close() end
-        if log.statuses[id] ~= status then return end
-        log.statuses[id] = nil
-        redraw_right(bufnr, id)
-      end)
-    )
-  end
+  stop_expiry(log.statuses[id])
+  log.statuses[id] = new_status(kind, text, function(status)
+    if log.statuses[id] ~= status then return end
+    log.statuses[id] = nil
+    redraw_right(bufnr, id)
+  end)
   redraw_right(bufnr, id)
+  update_spinner()
+end
+
+--- Draws the status of a log buffer's fetch before its remotes. A finished
+--- fetch's status is cleared after a while.
+---@param bufnr integer
+---@param kind nvim_jj.StatusKind
+---@param text string
+local set_fetch_status = function(bufnr, kind, text)
+  local log = logs[bufnr]
+  if not log then return end
+  stop_expiry(log.fetch)
+  log.fetch = new_status(kind, text, function(status)
+    if log.fetch ~= status then return end
+    log.fetch = nil
+    draw_remotes()
+  end)
+  draw_remotes()
   update_spinner()
 end
 
@@ -464,8 +659,9 @@ local row_of = function(log, id)
   end
 end
 
---- Returns the row of the working-copy commit.
----@param log nvim_jj.Log
+--- Returns the row of the working-copy commit among a log's rows, drawn or
+--- read.
+---@param log nvim_jj.Log|nvim_jj.Load
 ---@return integer?
 local working_copy_row = function(log)
   for index, row in ipairs(log.rows) do
@@ -577,8 +773,9 @@ end
 --- Draws what a log buffer's read of jj's log has read so far, and reads
 --- more of it while the windows showing the buffer are close to its end.
 --- The rows read replace the drawn ones once there are as many as before
---- and enough to fill the windows, or jj is done, and are then only
---- appended while the buffer is unmodified.
+--- and enough to fill the windows, and the working-copy commit's if the
+--- cursors are to move to it, or jj is done. They're then only appended
+--- while the buffer is unmodified.
 ---@param bufnr integer
 ---@param log nvim_jj.Log
 local flush = function(bufnr, log)
@@ -588,11 +785,19 @@ local flush = function(bufnr, log)
   if load.replace then
     -- The windows may have opened since the read started.
     local minimum = math.max(load.minimum, rows_in_view(bufnr), 1)
-    if #load.rows < minimum and not load.done then return end
+    local ready = #load.rows >= minimum
+      and not (log.to_working_copy and not working_copy_row(load))
+    if not ready and not load.done then return end
     load.replace = false
     local rows = load.rows
     load.rows = {}
     replace_rows(bufnr, log, rows)
+
+    if log.to_working_copy then
+      log.to_working_copy = nil
+      local line = working_copy_row(log)
+      if line then set_cursors(bufnr, line) end
+    end
 
     local callbacks = log.on_drawn
     log.on_drawn = {}
@@ -682,10 +887,9 @@ local release = function(bufnr)
   if log.watcher then log.watcher:close() end
   if log.timer then log.timer:close() end
   for _, status in pairs(log.statuses) do
-    if status.timer and not status.timer:is_closing() then
-      status.timer:close()
-    end
+    stop_expiry(status)
   end
+  stop_expiry(log.fetch)
   logs[bufnr] = nil
   update_spinner()
 
@@ -1004,6 +1208,165 @@ local code_actions = function(bufnr, line)
   return result
 end
 
+--- The floats hovering changes, keyed by the log buffers they were opened
+--- from.
+---@type table<integer, integer?>
+local hovers = {}
+
+--- The border of the floats showing changes, an empty column on each side.
+local padding = { "", "", "", " ", "", "", "", " " }
+
+--- Opens a float at the cursor showing a change's view, fitting it in the
+--- space above or below the cursor, with a column of padding on each side.
+--- The float closes once the cursor moves in the log, or once a buffer other
+--- than the log or the view is entered, unless the view's description has
+--- unsaved edits.
+---@param bufnr integer The log buffer.
+---@param view integer
+local open_hover = function(bufnr, view)
+  local width, height = change.size(view)
+  local win = vim.api.nvim_open_win(
+    view,
+    false,
+    vim.lsp.util.make_floating_popup_options(
+      math.min(width, vim.o.columns - 2),
+      height,
+      { border = padding }
+    )
+  )
+  change.set_window_options(win)
+  hovers[bufnr] = win
+
+  local group =
+    vim.api.nvim_create_augroup("nvim-jj-hover-" .. win, { clear = true })
+  local close = function()
+    if vim.api.nvim_win_is_valid(win) and not vim.bo[view].modified then
+      vim.api.nvim_win_close(win, true)
+    end
+  end
+  vim.api.nvim_create_autocmd(
+    { "CursorMoved", "CursorMovedI", "InsertCharPre" },
+    { group = group, buffer = bufnr, callback = close }
+  )
+  vim.api.nvim_create_autocmd("BufEnter", {
+    group = group,
+    callback = function(ev)
+      if ev.buf ~= bufnr and ev.buf ~= view then vim.schedule(close) end
+    end,
+  })
+  vim.api.nvim_create_autocmd("WinClosed", {
+    group = group,
+    pattern = tostring(win),
+    callback = function()
+      vim.api.nvim_del_augroup_by_id(group)
+      if hovers[bufnr] == win then hovers[bufnr] = nil end
+    end,
+  })
+end
+
+--- Returns the layout of a float covering the editor.
+---@return vim.api.keyset.win_config
+local full_layout = function()
+  return {
+    relative = "editor",
+    width = vim.o.columns,
+    height = vim.o.lines,
+    row = 0,
+    col = 0,
+  }
+end
+
+--- The blend of the backdrop behind the changes viewed in a centered float,
+--- from 0 for opaque to 100 for transparent.
+local backdrop_blend = 60
+
+--- Opens a backdrop fading the editor under a float. The backdrop follows
+--- the editor's size, and closes with the float.
+---@param win integer The float.
+local open_backdrop = function(win)
+  local buf = vim.api.nvim_create_buf(false, true)
+  vim.bo[buf].bufhidden = "wipe"
+  local backdrop = vim.api.nvim_open_win(
+    buf,
+    false,
+    vim.tbl_extend("force", full_layout(), {
+      style = "minimal",
+      focusable = false,
+      border = "none",
+      zindex = (vim.api.nvim_win_get_config(win).zindex or 50) - 1,
+    })
+  )
+  vim.wo[backdrop].winhighlight = "Normal:JjBackdrop"
+  vim.wo[backdrop].winblend = backdrop_blend
+
+  local group =
+    vim.api.nvim_create_augroup("nvim-jj-backdrop-" .. win, { clear = true })
+  vim.api.nvim_create_autocmd("VimResized", {
+    group = group,
+    callback = function() vim.api.nvim_win_set_config(backdrop, full_layout()) end,
+  })
+  vim.api.nvim_create_autocmd("WinClosed", {
+    group = group,
+    pattern = tostring(win),
+    callback = function()
+      vim.api.nvim_del_augroup_by_id(group)
+      vim.schedule(function()
+        if vim.api.nvim_win_is_valid(backdrop) then
+          vim.api.nvim_win_close(backdrop, true)
+        end
+      end)
+    end,
+  })
+end
+
+--- Returns the layout of a float centered on the editor, taking 80% of its
+--- width and height inside its padding.
+---@return vim.api.keyset.win_config
+local centered_layout = function()
+  local width = math.floor(vim.o.columns * 0.8 + 0.5)
+  local height = math.floor(vim.o.lines * 0.8 + 0.5)
+  return {
+    relative = "editor",
+    width = width,
+    height = height,
+    row = math.floor((vim.o.lines - height) / 2),
+    col = math.floor((vim.o.columns - width) / 2) - 1,
+  }
+end
+
+--- Opens a float centered on the editor showing a buffer on the editor's
+--- background, padded, over a backdrop fading the rest of the editor. The
+--- float follows the editor's size.
+---@param buf integer
+---@return integer win
+local open_centered_float = function(buf)
+  local win = vim.api.nvim_open_win(
+    buf,
+    true,
+    -- The backdrop goes over the floats at the default level.
+    vim.tbl_extend(
+      "force",
+      centered_layout(),
+      { border = padding, zindex = 60 }
+    )
+  )
+  vim.wo[win].winhighlight = "NormalFloat:Normal,FloatBorder:Normal"
+  open_backdrop(win)
+
+  local group =
+    vim.api.nvim_create_augroup("nvim-jj-float-" .. win, { clear = true })
+  vim.api.nvim_create_autocmd("VimResized", {
+    group = group,
+    callback = function() vim.api.nvim_win_set_config(win, centered_layout()) end,
+  })
+  vim.api.nvim_create_autocmd("WinClosed", {
+    group = group,
+    pattern = tostring(win),
+    callback = function() vim.api.nvim_del_augroup_by_id(group) end,
+  })
+  return win
+end
+
 --- Returns the in-process language server of the log buffers, which serves
 --- the code actions on their changes.
 ---@param dispatchers vim.lsp.rpc.Dispatchers
@@ -1045,28 +1408,43 @@ local server = function(dispatchers)
     return nil, { code = -32601, message = "Method not found: " .. method }
   end
 
-  --- Replies to a hover request with the summary of the change on its line.
+  --- Shows the view of the change on a hover request's line in a float at
+  --- the cursor, or focuses the float if it's already shown. In the float, a
+  --- hover request goes back to the log. The reply is empty, since the float
+  --- isn't Neovim's.
   ---@param params table
   ---@param respond fun(err?: lsp.ResponseError, result: any)
   local hover = function(params, respond)
+    respond(nil, nil)
     local bufnr = buffer_of_uri(params.textDocument.uri)
-    local log = bufnr and logs[bufnr]
-    local row = log and log.rows[params.position.line + 1]
-    if not log or not row then return respond(nil, vim.NIL) end
-    change.recap(log.root, row.change.id, function(err, recap)
-      if err or not recap then return respond(nil, vim.NIL) end
-      respond(nil, {
-        contents = {
-          kind = "plaintext",
-          value = table.concat(recap.lines, "\n"),
-        },
-      })
-      -- Neovim shows the reply's text in a window it records in the log
-      -- buffer, which then gets the view's highlights.
-      ---@type integer?
-      local win = vim.b[bufnr].lsp_floating_preview
-      if win and vim.api.nvim_win_is_valid(win) then
-        change.decorate(vim.api.nvim_win_get_buf(win), win, recap)
+    if not bufnr then return end
+    local current = vim.api.nvim_get_current_win()
+    for _, win in pairs(hovers) do
+      if win == current then
+        vim.cmd.wincmd("p")
+        return
+      end
+    end
+    local log = logs[bufnr]
+    local line = params.position.line + 1
+    local row = log and log.rows[line]
+    if not log or not row then return end
+    local shown = hovers[bufnr]
+    if shown and vim.api.nvim_win_is_valid(shown) then
+      vim.api.nvim_set_current_win(shown)
+      return
+    end
+    local view = change.buffer(log.root, row.change.id)
+    change.when_drawn(view, function()
+      if
+        vim.api.nvim_get_current_win() == current
+        and vim.api.nvim_get_current_buf() == bufnr
+        and vim.fn.line(".") == line
+      then
+        open_hover(bufnr, view)
+      elseif #vim.fn.win_findbuf(view) == 0 then
+        -- The cursor moved before the view was drawn.
+        vim.api.nvim_buf_delete(view, { force = true })
       end
     end)
   end
@@ -1135,15 +1513,28 @@ local refresh_pull_requests = function(bufnr)
   )
 end
 
---- Finds out whether a log buffer's remote is on GitHub, and reads its open
---- pull requests if it is.
+--- Reads the remotes of a log buffer's repo and the one changes are pushed
+--- to, and the open pull requests of that remote if it's a GitHub repo other
+--- than the one read before.
 ---@param bufnr integer
-local detect_github = function(bufnr)
+local read_remotes = function(bufnr)
   local log = logs[bufnr]
   if not log then return end
-  jj.remote_url(log.root, config.remote, function(err, url)
-    if err or not url or logs[bufnr] ~= log then return end
-    log.github_repo = github.repo_of(url)
+  jj.remotes(log.root, function(err, remotes, push)
+    if err or not remotes or logs[bufnr] ~= log then return end
+    log.remotes, log.remote = remotes, push
+    draw_remotes()
+
+    ---@type string?
+    local github_repo
+    for _, remote in ipairs(remotes) do
+      if remote.name == push then github_repo = github.repo_of(remote.url) end
+    end
+    if github_repo == log.github_repo then return end
+    log.github_repo = github_repo
+    log.pull_requests = {}
+    log.pull_requests_version = log.pull_requests_version + 1
+    redraw_right(bufnr)
     refresh_pull_requests(bufnr)
   end)
 end
@@ -1167,7 +1558,7 @@ local load = function(bufnr)
     }
     logs[bufnr] = log
     watch(bufnr, log)
-    detect_github(bufnr)
+    read_remotes(bufnr)
   end
 
   vim.bo[bufnr].buftype = "acwrite"
@@ -1184,30 +1575,21 @@ local load = function(bufnr)
     vim.keymap.set({ "n", "x" }, keys, "<Nop>", { buffer = bufnr })
   end
 
-  -- `<Tab><Tab>` views the change instead of the log, and `<Tab>` followed by
-  -- an arrow views it in a split in that direction.
+  -- `<Tab><Right>` views the change in a split right of the log, and
+  -- `<Tab><Tab>` in a float centered on the editor.
   for keys, where in pairs({
-    ["<Tab><Tab>"] = "here",
-    ["<Tab><Up>"] = "above",
-    ["<Tab><Down>"] = "below",
-    ["<Tab><Left>"] = "left",
     ["<Tab><Right>"] = "right",
+    ["<Tab><Tab>"] = "float",
   }) do
     vim.keymap.set("n", keys, function()
-      M.open_change(
-        bufnr,
-        vim.fn.line("."),
-        where --[[@as "here"|"above"|"below"|"left"|"right"]]
-      )
+      M.open_change(bufnr, vim.fn.line("."), where --[[@as "right"|"float"]])
     end, { buffer = bufnr, desc = "View the change" })
   end
 
   attach_server(bufnr, log.root)
 
-  render(bufnr, true, function()
-    local line = working_copy_row(log)
-    if line then set_cursors(bufnr, line) end
-  end)
+  log.to_working_copy = true
+  render(bufnr, true)
 end
 
 --- The error of an action on a log buffer whose lines don't match its rows.
@@ -2198,10 +2580,11 @@ end
 M.push = function(bufnr, first, last, branch, on_done)
   local log = logs[bufnr]
   if not log then return end
-  local root, remote = log.root, config.remote
+  local root, remote = log.root, log.remote
 
   local err, selected = changes_between(bufnr, log, first, last)
-  if err or not selected then
+  if not err and not remote then err = "There's no remote to push to" end
+  if err or not selected or not remote then
     notify(err or "")
     if on_done then on_done(err) end
     return
@@ -2586,67 +2969,48 @@ M.check_out = function(bufnr, line, on_done)
   end)
 end
 
---- Fetches the remote's bookmarks into the log buffer's workspace. If the
---- trunk moved, the changes between it and the working-copy commit that
---- aren't on top of it yet, with their descendants, can be moved onto it.
+--- Returns the outcome of a fetch, for messages: the bookmarks it updated,
+--- created and deleted.
+---@param bookmarks nvim_jj.FetchedBookmark[]
+---@return string
+local fetch_outcome = function(bookmarks)
+  if #bookmarks == 0 then return "Up to date" end
+  local groups = {}
+  for _, kind in ipairs({ "updated", "new", "deleted" }) do
+    local names = {}
+    for _, bookmark in ipairs(bookmarks) do
+      if bookmark.kind == kind then names[#names + 1] = bookmark.name end
+    end
+    if #names > 0 then
+      local verb = kind:sub(1, 1):upper() .. kind:sub(2)
+      groups[#groups + 1] = ("%s %s"):format(verb, table.concat(names, ", "))
+    end
+  end
+  return table.concat(groups, " · ")
+end
+
+--- Fetches the bookmarks of the remotes jj fetches from by default into the
+--- log buffer's workspace, drawing the fetch's progress before the log's
+--- remotes. The log is redrawn after it unless it has unsaved edits.
 ---@param bufnr integer
 ---@param on_done? fun(err?: string)
 M.fetch = function(bufnr, on_done)
   local log = logs[bufnr]
   if not log then return end
-  local root, remote = log.root, config.remote
 
-  ---@param err? string
-  local finish = function(err)
-    if err then notify(err) end
-    if on_done then on_done(err) end
-  end
-
-  if vim.bo[bufnr].modified then return finish(not_saved) end
-
-  jj.changes(root, "trunk()", function(err, before)
-    if err or not before then return finish(err) end
-    notify(("Fetching %s"):format(remote), vim.log.levels.INFO)
-    jj.fetch(root, remote, function(fetch_err)
-      if fetch_err then return finish(fetch_err) end
-      notify(("Fetched %s"):format(remote), vim.log.levels.INFO)
-      jj.changes(root, "trunk()", function(after_err, after)
-        if after_err or not after then return finish(after_err) end
-        local trunk = after[1]
-        if
-          not trunk or (before[1] and before[1].commit_id == trunk.commit_id)
-        then
-          return render(bufnr, false, finish)
-        end
-
-        local behind = "(trunk()..@ ~ trunk()::)::"
-        jj.changes(root, behind, function(behind_err, changes)
-          if behind_err or not changes then return finish(behind_err) end
-          if #changes == 0 then return render(bufnr, false, finish) end
-
-          local name = trunk.bookmarks[1] or "trunk()"
-          local move = ("Move them onto %s"):format(name)
-          vim.ui.select({ move, "Leave them" }, {
-            prompt = ("%s moved, and %s aren't on top of it"):format(
-              name,
-              count_changes(#changes)
-            ),
-          }, function(choice)
-            if choice ~= move then return render(bufnr, false, finish) end
-            local ids = vim.tbl_map(
-              function(change) return change.id end,
-              changes
-            )
-            local what = ("moving %s onto %s"):format(count_changes(#ids), name)
-            local place = function() return { onto = "trunk()" } end
-            move_changes(root, ids, place, what, function(move_err)
-              if move_err then return finish(move_err) end
-              render(bufnr, false, finish)
-            end)
-          end)
-        end)
-      end)
-    end)
+  set_fetch_status(bufnr, "busy", "Fetching")
+  jj.fetch(log.root, function(err, bookmarks)
+    if err or not bookmarks then
+      set_fetch_status(bufnr, "failed", err or "")
+      if on_done then on_done(err) end
+      return
+    end
+    set_fetch_status(bufnr, "done", fetch_outcome(bookmarks))
+    if vim.bo[bufnr].modified then
+      if on_done then on_done() end
+      return
+    end
+    render(bufnr, false, on_done)
   end)
 end
 
@@ -2852,11 +3216,11 @@ M.run_action = function(bufnr, line, title)
   if not ok then ctx.set_status("failed", tostring(err)) end
 end
 
---- Opens a view of the change on a line of a log buffer: instead of the log,
---- or in a split above, below, left or right of its window.
+--- Opens a view of the change on a line of a log buffer: in a split right of
+--- its window, or in a float centered on the editor.
 ---@param bufnr integer
 ---@param line integer The 1-based line.
----@param where "here"|"above"|"below"|"left"|"right"
+---@param where "right"|"float"
 M.open_change = function(bufnr, line, where)
   local log = logs[bufnr]
   if not log then return end
@@ -2866,20 +3230,14 @@ M.open_change = function(bufnr, line, where)
 
   ---@type integer
   local win
-  if where == "here" then
-    win = show_instead_of_log(bufnr, view)
+  if where == "float" then
+    win = open_centered_float(view)
   else
-    local command = ({
-      above = "aboveleft split",
-      below = "belowright split",
-      left = "aboveleft vsplit",
-      right = "belowright vsplit",
-    })[where]
-    vim.cmd(command)
+    vim.cmd("belowright vsplit")
     win = vim.api.nvim_get_current_win()
     vim.api.nvim_win_set_buf(win, view)
-    table.insert(log.views, view)
   end
+  table.insert(log.views, view)
   change.set_window_options(win)
 end
 
@@ -2895,7 +3253,7 @@ end
 M.open_pull_request = function(bufnr, line, on_done)
   local log = logs[bufnr]
   if not log then return end
-  local root, remote = log.root, config.remote
+  local root, remote = log.root, log.remote
 
   local err, changes = changes_between(bufnr, log, line, line)
   if err or not changes then
@@ -2912,6 +3270,7 @@ M.open_pull_request = function(bufnr, line, on_done)
     if on_done then on_done(open_err, pull_request) end
   end
 
+  if not remote then return finish("There's no remote to push to") end
   local repo = log.github_repo
   if not repo then return finish(("%s isn't on GitHub"):format(remote)) end
 
@@ -3116,6 +3475,7 @@ local set_highlights = function()
   ---@type table<string, vim.api.keyset.highlight>
   local highlights = {
     JjAuthor = { fg = comment },
+    JjBackdrop = { bg = "#000000" },
     JjBookmark = { link = "Constant" },
     JjChangeId = { fg = foreground("Identifier"), bold = true },
     JjChangeIdRest = { fg = comment },
@@ -3126,6 +3486,8 @@ local set_highlights = function()
     JjGraph = { link = "NonText" },
     JjPlaceholder = { link = "Comment" },
     JjPullRequest = { link = "Special" },
+    JjRemote = { link = "Constant" },
+    JjRemoteUrl = { fg = comment },
     JjStatusBusy = { fg = comment },
     JjStatusDone = { link = "DiagnosticOk" },
     JjStatusFailed = { link = "DiagnosticError" },
@@ -3224,7 +3586,7 @@ local redraw_cursor_spans = function(win, bufnr)
   if indices ~= "" then redraw(row) end
 end
 
----@param opts? { gh?: string, height?: integer, lookahead?: integer, remote?: string, revset?: string }
+---@param opts? { gh?: string, height?: integer, lookahead?: integer, revset?: string }
 M.setup = function(opts)
   config = vim.tbl_deep_extend("force", config, opts or {})
   set_highlights()
@@ -3294,6 +3656,19 @@ M.setup = function(opts)
     end,
   })
 
+  vim.api.nvim_create_autocmd({
+    "BufWinEnter",
+    "WinClosed",
+    "WinResized",
+    "VimResized",
+    "TabEnter",
+  }, {
+    group = group,
+    desc = "Draws the jj logs' remotes at the top right of their windows",
+    -- A closed window is still valid while its autocommands run.
+    callback = vim.schedule_wrap(draw_remotes),
+  })
+
   vim.api.nvim_create_autocmd("BufWinEnter", {
     group = group,
     pattern = change.scheme .. "*",
@@ -3340,6 +3715,13 @@ M.setup = function(opts)
         render(ev.buf, true)
       end
     end,
+  })
+
+  vim.api.nvim_create_autocmd("BufEnter", {
+    group = group,
+    pattern = pattern,
+    desc = "Reads the remotes of the jj log's repo",
+    callback = function(ev) read_remotes(ev.buf) end,
   })
 
   vim.api.nvim_create_autocmd("BufWipeout", {

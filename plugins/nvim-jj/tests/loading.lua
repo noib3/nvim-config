@@ -20,6 +20,15 @@ test("only the changes close to the view are loaded", function()
   h.eq(line_count(bufnr) < count, true, "the whole log is loaded")
 end)
 
+test("the log opens on the working-copy commit below the view", function()
+  local root = h.long_repo(count)
+  h.run(root, { "jj", "edit", "--quiet", 'description(glob:"commit 2950*")' })
+  local bufnr = h.open(root)
+
+  h.eq(vim.api.nvim_get_current_line(), "commit 2950")
+  h.eq(vim.api.nvim_win_get_cursor(0)[1], h.row(bufnr, "commit 2950"))
+end)
+
 test("scrolling to the end loads more changes", function()
   local root = h.long_repo(count)
   local bufnr = h.open(root)

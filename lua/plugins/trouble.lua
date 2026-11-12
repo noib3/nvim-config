@@ -52,6 +52,23 @@ Main._find = function()
   end
 end
 
+-- Without a main window, trouble jumps to an item in the list's own window and
+-- opens the list again in a new one. The old window keeps the list's variable,
+-- which makes trouble and the list's plugins take it for a list.
+vim.api.nvim_create_autocmd("BufWinEnter", {
+  group = vim.api.nvim_create_augroup(
+    "noib3/trouble-windows",
+    { clear = true }
+  ),
+  desc = "Forgets that a window showed a trouble list once it shows another buffer",
+  callback = function(ev)
+    local win = vim.api.nvim_get_current_win()
+    if vim.w[win].trouble and vim.bo[ev.buf].filetype ~= "trouble" then
+      vim.w[win].trouble = nil
+    end
+  end,
+})
+
 ---@param into string
 ---@return trouble.Action
 local move_to = function(into)

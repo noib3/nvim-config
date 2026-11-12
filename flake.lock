@@ -636,7 +636,6 @@
         "nvim-web-devicons": "nvim-web-devicons",
         "plenary-nvim": "plenary-nvim",
         "rustaceanvim": "rustaceanvim",
-        "toggleterm-nvim": "toggleterm-nvim",
         "tokyonight-nvim": "tokyonight-nvim",
         "treefmt-nix": "treefmt-nix",
         "treesitter-modules-nvim": "treesitter-modules-nvim",
@@ -673,22 +672,6 @@
       "original": {
         "owner": "nix-systems",
         "repo": "default",
-        "type": "github"
-      }
-    },
-    "toggleterm-nvim": {
-      "flake": false,
-      "locked": {
-        "lastModified": 1741512039,
-        "narHash": "sha256-fytbX+L12TK45YKFU9K+iFJcDrwboKabihc2LtX29J4=",
-        "owner": "akinsho",
-        "repo": "toggleterm.nvim",
-        "rev": "9a88eae817ef395952e08650b3283726786fb5fb",
-        "type": "github"
-      },
-      "original": {
-        "owner": "akinsho",
-        "repo": "toggleterm.nvim",
         "type": "github"
       }
     },
