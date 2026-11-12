@@ -103,7 +103,6 @@ let
     inputs.fzf-lua
     inputs.gruvbox-nvim
     inputs.hop-nvim
-    inputs.inc-rename-nvim
     inputs.incline-nvim
     inputs.lsp-progress-nvim
     inputs.lualine-nvim

@@ -133,6 +133,38 @@ test("deleted and new files move whole", function()
   wait_in_parent("new.txt", text({ "new" }))
 end)
 
+test("moving all the changes keeps the working-copy commit", function()
+  ---@param repo string
+  ---@return string
+  local description = function(repo)
+    return h.run(
+      repo,
+      { "jj", "log", "--no-graph", "-r", "@", "-T", "description" }
+    )
+  end
+
+  -- The last hunk.
+  local hunk_repo = h.repo(
+    { ["a.txt"] = text({ "a" }) },
+    { ["a.txt"] = text({ "A" }) }
+  )
+  h.run(hunk_repo, { "jj", "describe", "--quiet", "-m", "scratchpad" })
+  local a = changed("a.txt", hunk_repo)
+  hunks.move_hunk(a, assert(a.hunks[1]), "@-")
+  wait_in_parent("a.txt", text({ "A" }), hunk_repo)
+  h.eq(description(hunk_repo), "scratchpad\n")
+
+  -- The last file.
+  local file_repo = h.repo(
+    { ["b.txt"] = text({ "b" }) },
+    { ["b.txt"] = text({ "B" }) }
+  )
+  h.run(file_repo, { "jj", "describe", "--quiet", "-m", "scratchpad" })
+  hunks.move_file(changed("b.txt", file_repo), "@-")
+  wait_in_parent("b.txt", text({ "B" }), file_repo)
+  h.eq(description(file_repo), "scratchpad\n")
+end)
+
 test("moving from an outdated diff doesn't undo the moves before", function()
   local repo = h.repo(
     { ["g.txt"] = text({ "a", "b", "c", "d" }) },

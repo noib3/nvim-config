@@ -67,10 +67,6 @@
       url = "github:smoka7/hop.nvim";
       flake = false;
     };
-    inc-rename-nvim = {
-      url = "github:smjonas/inc-rename.nvim";
-      flake = false;
-    };
     incline-nvim = {
       url = "github:b0o/incline.nvim/pull/96/head";
       flake = false;

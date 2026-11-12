@@ -1,3 +1,5 @@
+local rename = require("lsp.rename")
+
 local keymap = vim.keymap
 
 local lsp_group = vim.api.nvim_create_augroup("noib3/lsp", {})
@@ -27,10 +29,7 @@ local on_attach = function(client, bufnr)
 
   -- Rename the symbol under the cursor.
   if client:supports_method("textDocument/rename") then
-    local inc_rename = function()
-      return ":IncRename " .. vim.fn.expand("<cword>")
-    end
-    keymap.set("n", "R", inc_rename, { expr = true, buffer = bufnr })
+    keymap.set("n", "R", rename.rename, opts)
   end
 
   -- Selects a code action available at the current cursor position.

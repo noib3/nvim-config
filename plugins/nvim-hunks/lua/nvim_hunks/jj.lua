@@ -268,6 +268,7 @@ M.squash_file = function(root, into, path, text, other_paths, on_done)
     "--into",
     into,
     "--use-destination-message",
+    "--keep-emptied",
     "--tool",
     "nvim-hunks",
     "--config",
@@ -304,6 +305,7 @@ M.squash_paths = function(root, into, paths, on_done)
     "--into",
     into,
     "--use-destination-message",
+    "--keep-emptied",
     "--",
   }
   for _, path in ipairs(paths) do

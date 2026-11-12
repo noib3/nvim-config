@@ -240,22 +240,6 @@
         "type": "github"
       }
     },
-    "inc-rename-nvim": {
-      "flake": false,
-      "locked": {
-        "lastModified": 1785442018,
-        "narHash": "sha256-EWSmklr8kuv/XlOemHxCh9HGjoHdNK1e2s9gkMZvHZU=",
-        "owner": "smjonas",
-        "repo": "inc-rename.nvim",
-        "rev": "ddff8bd3eccedf043bd73f5bf89cf90d2d6d8105",
-        "type": "github"
-      },
-      "original": {
-        "owner": "smjonas",
-        "repo": "inc-rename.nvim",
-        "type": "github"
-      }
-    },
     "incline-nvim": {
       "flake": false,
       "locked": {
@@ -614,7 +598,6 @@
         "fzf-lua": "fzf-lua",
         "gruvbox-nvim": "gruvbox-nvim",
         "hop-nvim": "hop-nvim",
-        "inc-rename-nvim": "inc-rename-nvim",
         "incline-nvim": "incline-nvim",
         "lsp-progress-nvim": "lsp-progress-nvim",
         "lualine-nvim": "lualine-nvim",

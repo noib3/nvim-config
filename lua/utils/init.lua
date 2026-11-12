@@ -9,4 +9,5 @@ return {
   lua = require("utils.lua"),
   math = require("utils.math"),
   motion = require("utils.motion"),
+  window = require("utils.window"),
 }

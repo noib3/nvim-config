@@ -845,9 +845,10 @@ M.buffer = function(root, id)
       op_debounce_ms,
       0,
       vim.schedule_wrap(function()
-        if views[bufnr] == view and not vim.bo[bufnr].modified then
-          load(bufnr)
-        end
+        if views[bufnr] ~= view then return end
+        -- A buffer wiped with autocmds ignored was never released.
+        if not vim.api.nvim_buf_is_valid(bufnr) then return release(bufnr) end
+        if not vim.bo[bufnr].modified then load(bufnr) end
       end)
     )
   end)

@@ -72,4 +72,34 @@ M.save = function(opts)
   if not did_send_request then save_buf() end
 end
 
+--- Returns the 0-based byte columns at which the token on a position of a
+--- buffer starts and ends, the end being exclusive. Returns nothing if there's
+--- no such token, or if it spans several lines.
+---@param bufnr integer
+---@param row integer The 0-based line.
+---@param col integer The 0-based byte column.
+---@return integer? start
+---@return integer? finish
+M.token_at = function(bufnr, row, col)
+  local parser = vim.treesitter.get_parser(bufnr, nil, { error = false })
+  if parser then
+    parser:parse({ row, row + 1 })
+    local node = vim.treesitter.get_node({
+      bufnr = bufnr,
+      pos = { row, col },
+      ignore_injections = false,
+      include_anonymous = true,
+    })
+    if not node or node:child_count() > 0 then return end
+    local start_row, start_col, end_row, end_col = node:range()
+    if start_row ~= row or end_row ~= row then return end
+    return start_col, end_col
+  end
+
+  local line = assert(vim.api.nvim_buf_get_lines(bufnr, row, row + 1, true)[1])
+  local match = vim.fn.matchstrpos(line, [[\k*\%]] .. col + 1 .. [[c\k\+]])
+  if match[2] == -1 then return end
+  return match[2], match[3]
+end
+
 return M

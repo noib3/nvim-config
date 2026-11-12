@@ -1,4 +1,6 @@
+local buffer = require("utils.buffer")
 local logos = require("utils.logos")
+local window = require("utils.window")
 
 local M = {}
 
@@ -18,36 +20,6 @@ local cancel_keys = { ["<Esc>"] = true, ["<C-C>"] = true }
 
 --- The chevron before the selected item.
 local chevron = "▸ "
-
---- Returns the 0-based byte column at which the token on a position of a
---- buffer starts. The token is treesitter's leaf node there, or the keyword
---- there in a buffer without a parser. The column is the position's own one
---- if there's no such token, or if the token starts on an earlier line.
----@param bufnr integer
----@param row integer The 0-based line.
----@param col integer The 0-based byte column.
----@return integer
-local token_start = function(bufnr, row, col)
-  local parser = vim.treesitter.get_parser(bufnr, nil, { error = false })
-  if parser then
-    parser:parse({ row, row + 1 })
-    local node = vim.treesitter.get_node({
-      bufnr = bufnr,
-      pos = { row, col },
-      ignore_injections = false,
-      include_anonymous = true,
-    })
-    if not node or node:child_count() > 0 then return col end
-    local start_row, start_col = node:start()
-    return start_row == row and start_col or col
-  end
-
-  local line = assert(vim.api.nvim_buf_get_lines(bufnr, row, row + 1, true)[1])
-  if vim.fn.match(vim.fn.strpart(line, col, 1, 1), [[\k]]) ~= 0 then
-    return col
-  end
-  return vim.fn.match(line:sub(1, col), [[\k*$]])
-end
 
 --- Returns the name of the highlight group of a logo, defining the group with
 --- the logo's color.
@@ -126,7 +98,7 @@ M.select = function(items, opts, on_choice)
   local indent = ""
   if not opts.prefix then
     local info = assert(vim.fn.getwininfo(win)[1])
-    local col = token_start(bufnr, row, cursor[2])
+    local col = buffer.token_at(bufnr, row, cursor[2]) or cursor[2]
     -- `curscol` skips the inline virtual text before the token, unlike `col`.
     local pos = vim.fn.screenpos(win, row + 1, col + 1)
     indent = (" "):rep(
@@ -139,19 +111,7 @@ M.select = function(items, opts, on_choice)
     default = true,
   })
 
-  -- Scroll the window down if the lines would go past its bottom.
-  local height = vim.api.nvim_win_text_height(win, {
-    start_row = view.topline - 1,
-    end_row = row,
-  }).all + #items
-  local overflow = height - vim.api.nvim_win_get_height(win)
-  if overflow > 0 then
-    local hidden = vim.api.nvim_win_text_height(win, {
-      start_row = view.topline - 1,
-      max_height = overflow,
-    }).end_row
-    vim.fn.winrestview({ topline = math.min(hidden + 2, row + 1) })
-  end
+  window.scroll_to_fit_below(win, row, #items)
 
   vim.api.nvim__ns_set(ns, { wins = { win } })
 
