@@ -60,6 +60,7 @@ local conceal_namespace = vim.api.nvim_create_namespace("nvim-threads-conceal")
 ---@field send fun(request: nvim_threads.Request, reply: nvim_threads.Reply): (fun()?)
 --- Returns the participant's own mentions in a buffer's threads, which are
 --- its name, a dot and something telling them apart, like `claude.docs`.
+--- They're completed instead of its name, which still mentions it.
 ---@field mentions? fun(bufnr: integer): nvim_threads.Mention[]
 --- The default color of the participant's own highlight group, like
 --- `ThreadsAuthorClaude` for `claude`, as a `#rrggbb` hex string.
@@ -360,17 +361,21 @@ local participants_of = function(bufnr)
 end
 
 --- Returns the mentions completed after `@` in a float of a buffer: each
---- participant's name, then its own mentions.
+--- participant's own mentions, or its name if it has none.
 ---@param bufnr integer
 ---@return nvim_threads.Mention[]
 local completions_of = function(bufnr)
   local items = {}
   for _, name in ipairs(participants_of(bufnr)) do
-    items[#items + 1] = { name = name, detail = "Participant" }
     local participant = assert(participants[name])
+    local ok, own = false, nil
     if participant.mentions then
-      local ok, own = pcall(participant.mentions, bufnr)
-      if ok and type(own) == "table" then vim.list_extend(items, own) end
+      ok, own = pcall(participant.mentions, bufnr)
+    end
+    if ok and type(own) == "table" and #own > 0 then
+      vim.list_extend(items, own)
+    else
+      items[#items + 1] = { name = name, detail = "Participant" }
     end
   end
   return items
@@ -541,7 +546,8 @@ local fill = function(win, rows, full)
   for index, row in ipairs(history) do
     local border = row.prefix[1] or { render.border }
     local shaded = render.is_shaded(row)
-    current.borders[index] = { border[1], border[2], shaded }
+    current.borders[index] =
+      { border[1], border[2], shaded, row.kind == "header" }
     frame(index, render.right_border(row), shaded)
     if row.fill then
       vim.api.nvim_buf_set_extmark(buf, float_namespace, index - 1, 0, {
@@ -1260,10 +1266,13 @@ local open_float = function(bufnr, thread, opts)
 end
 
 --- Forgets a thread whose float closed if it never got a comment, and
---- otherwise collapses it, keeping its draft if it has one.
+--- otherwise collapses it, keeping its draft if it has one. A window command
+--- closing the float, like `:q`, leaves the cursor on the collapsed thread's
+--- title, like collapsing it does.
 ---@param thread_id string
 ---@param source_buf integer
-local on_float_closed = function(thread_id, source_buf)
+---@param quit_from? integer The window the float was over, if a window command closed it.
+local on_float_closed = function(thread_id, source_buf, quit_from)
   if vim.api.nvim_buf_is_valid(source_buf) then
     vim.api.nvim_buf_clear_namespace(source_buf, highlight_namespace, 0, -1)
   end
@@ -1281,6 +1290,18 @@ local on_float_closed = function(thread_id, source_buf)
   end
   view.expanded = false
   draw(source_buf, thread)
+
+  if not quit_from then return end
+  -- The window closing the float can be the one it's over.
+  vim.schedule(function()
+    if
+      vim.api.nvim_win_is_valid(quit_from)
+      and vim.api.nvim_win_get_buf(quit_from) == source_buf
+      and thread_of(source_buf, thread_id) == thread
+    then
+      open_float(source_buf, thread, { line = "first", source_win = quit_from })
+    end
+  end)
 end
 
 --- Returns the current float's thread, the float and its window.
@@ -2457,7 +2478,12 @@ M.setup = function(opts)
     pattern = "NvimThreadsFloatClosed",
     desc = "Hides the composer of the thread whose float closed",
     callback = function(ev)
-      on_float_closed(ev.data.thread_id, ev.data.source_buf)
+      local data = ev.data
+      on_float_closed(
+        data.thread_id,
+        data.source_buf,
+        data.quit and data.source_win or nil
+      )
     end,
   })
 

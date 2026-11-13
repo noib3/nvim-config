@@ -245,6 +245,22 @@ test(
   end
 )
 
+test("`:q` in a float collapses its thread, with the cursor on the title", function()
+  local bufnr = vim.api.nvim_get_current_buf()
+  vim.api.nvim_win_set_cursor(0, { 4, 0 })
+  h.eq(threads.step(1, "j"), true)
+  h.eq(threads.activate(), true, "the thread expands")
+  vim.cmd.quit()
+  h.wait(
+    function() return vim.bo.filetype == "nvim-threads" end,
+    "the cursor goes back into the float"
+  )
+  h.eq(vim.api.nvim_buf_line_count(0), 1, "the thread is collapsed")
+  h.eq(vim.api.nvim_win_get_cursor(0), { 1, 0 })
+  h.leave()
+  h.eq(h.virt_lines(bufnr)[4], { "\u{f075} ▸ Why THREE (4 messages)" })
+end)
+
 test("insert mode goes back to where it was left in the composer", function()
   local bufnr = vim.api.nvim_get_current_buf()
   vim.api.nvim_win_set_cursor(0, { 4, 0 })

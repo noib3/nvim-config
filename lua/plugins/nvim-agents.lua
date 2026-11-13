@@ -16,14 +16,17 @@ local max_diff_bytes = 100 * 1024
 --- The number of Claude sessions threads can mention by name.
 local max_mentioned_sessions = 10
 
---- Returns the Claude sessions matching paths best, with the labels telling
---- them apart in mentions like `@claude.<label>`: their titles, or else
---- their directories, in lowercase with dashes, and the start of their IDs
---- when they're the same.
+--- Returns the running Claude sessions matching paths best, with the labels
+--- telling them apart in mentions like `@claude.<label>`: their titles, or
+--- else their directories, in lowercase with dashes, and the start of their
+--- IDs when they're the same.
 ---@param paths string[] Absolute paths.
 ---@return { session: nvim_agents.Session, label: string }[]
 local labeled_sessions = function(paths)
-  local matches = agents.sessions({ paths = paths, agent = "claude" })
+  local matches = vim.tbl_filter(
+    function(match) return match.session.running end,
+    agents.sessions({ paths = paths, agent = "claude" })
+  )
   local labeled, counts = {}, {}
   for index = 1, math.min(#matches, max_mentioned_sessions) do
     local session = assert(matches[index]).session
@@ -54,8 +57,8 @@ local ago = function(time)
   return ("%dd"):format(math.floor(seconds / 86400))
 end
 
---- Returns a conversation in a fork of the Claude session matching the
---- paths best, or of the one a label names, and that session, or a
+--- Returns a conversation in a fork of the running Claude session matching
+--- the paths best, or of the one a label names, and that session, or a
 --- conversation in a new session if none matches them.
 ---@param paths string[] Absolute paths.
 ---@param root string The root of the paths' jj workspace.

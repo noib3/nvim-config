@@ -13,9 +13,9 @@ local zindex = 10
 ---@field offset integer The number of other threads' virtual lines before the thread's.
 ---@field source_scroll integer[] The source window's `topline`, `topfill` and `leftcol` when the float was placed.
 --- The borders of the float's lines, drawn by its 'statuscolumn', each as
---- its text, its highlight groups, and whether its line is on the threads'
---- background.
----@field borders [string, (string|string[])?, boolean?][]
+--- its text, its highlight groups, whether its line is on the threads'
+--- background, and whether only the line's first screen row shows it.
+---@field borders [string, (string|string[])?, boolean?, boolean?][]
 ---@field history integer The number of lines above the composer.
 --- The source window's `curswant` when the cursor moved into the float, and
 --- the float's right after.
@@ -196,17 +196,29 @@ M.place = function(win, count)
   float.source_scroll = scroll_of(float.source_win)
 end
 
+--- Fires the event of a float's closing.
+---@param float nvim_threads.Float
+---@param quit boolean Whether a window command closed the float's window.
+local fire_closed = function(float, quit)
+  vim.api.nvim_exec_autocmds("User", {
+    pattern = "NvimThreadsFloatClosed",
+    modeline = false,
+    data = {
+      thread_id = float.thread_id,
+      source_buf = float.source_buf,
+      source_win = float.source_win,
+      quit = quit,
+    },
+  })
+end
+
 ---@param win integer
 M.close = function(win)
   local float = floats[win]
   if not float then return end
   floats[win] = nil
   if vim.api.nvim_win_is_valid(win) then vim.api.nvim_win_close(win, true) end
-  vim.api.nvim_exec_autocmds("User", {
-    pattern = "NvimThreadsFloatClosed",
-    modeline = false,
-    data = { thread_id = float.thread_id, source_buf = float.source_buf },
-  })
+  fire_closed(float, false)
 end
 
 --- Moves a window's cursor to a screen column of a line, or to the line's
@@ -256,6 +268,9 @@ M.statuscolumn = function()
   local float = floats[vim.g.statusline_winid]
   local border = float and float.borders[vim.v.lnum]
   if not border then return render.border end
+  if border[4] and vim.v.virtnum > 0 then
+    border = { (" "):rep(vim.api.nvim_strwidth(border[1])), nil, border[3] }
+  end
   local hl = border[2]
   if type(hl) == "table" then hl = hl[#hl] end
   if not border[3] then
@@ -277,6 +292,18 @@ M.statusline = function()
   end
   return vim.wo[float.source_win].statusline
 end
+
+vim.api.nvim_create_autocmd("WinClosed", {
+  group = group,
+  desc = "Forgets the floats of threads closed by window commands",
+  callback = function(ev)
+    local win = tonumber(ev.match)
+    local float = win and floats[win]
+    if not float then return end
+    floats[win] = nil
+    fire_closed(float, true)
+  end,
+})
 
 vim.api.nvim_create_autocmd("WinScrolled", {
   group = group,

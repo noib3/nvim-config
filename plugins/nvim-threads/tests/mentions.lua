@@ -20,7 +20,7 @@ local root = h.repo({ ["f.txt"] = h.text({ "one", "two" }) }, {})
 vim.keymap.set({ "n", "x" }, "<F2>", function() threads.create() end)
 
 test(
-  "a participant's own mentions are completed, and tell its requests apart",
+  "a participant's own mentions are completed instead of its name, and tell its requests apart",
   function()
     h.open(root, "f.txt")
     vim.api.nvim_feedkeys(vim.keycode("1G<F2>"), "x", false)
@@ -39,7 +39,6 @@ test(
     h.eq(
       vim.tbl_map(function(item) return { item.label, item.detail } end, items),
       {
-        { "bot", "Participant" },
         { "bot.docs", "the docs session" },
         { "bot.api", "the API session" },
       }
