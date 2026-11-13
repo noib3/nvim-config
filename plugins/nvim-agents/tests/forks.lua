@@ -97,6 +97,14 @@ test(
   end
 )
 
+test("writes are returned as suggestions without old text", function()
+  local reply = prompt(agents.fork(session), "write")
+  h.eq(
+    assert(reply.result).edits,
+    { { path = "/repo/b.txt", new_text = "new\n" } }
+  )
+end)
+
 test("reads are allowed", function()
   local reply = prompt(agents.fork(session), "read")
   h.eq(assert(reply.result).text, "allowed")

@@ -4,7 +4,9 @@ local uv = vim.uv
 
 ---@class nvim_threads.Edit
 ---@field path string The edited file's path relative to the workspace's root.
----@field old_text string The text replaced, which occurs exactly once in the file.
+--- The text replaced, which occurs exactly once in the file, or nothing if
+--- the edit creates the file.
+---@field old_text? string
 ---@field new_text string
 ---@field resolution? "applied"|"rejected" Whether the edit was applied or rejected.
 

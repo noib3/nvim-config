@@ -39,6 +39,51 @@ M.read_lines = function(path)
   return lines
 end
 
+--- Returns the lines of the file an edit creates.
+---@param edit nvim_threads.Edit
+---@return string[]
+local created_lines = function(edit)
+  -- The file's last newline ends its last line.
+  local text = edit.new_text:gsub("\n$", "")
+  return vim.split(text, "\n", { plain = true })
+end
+
+--- Returns a text with an edit applied, or why it can't be.
+---@param text string
+---@param edit nvim_threads.Edit
+---@return string? text
+---@return string? err
+local apply_edit = function(text, edit)
+  local old_text = edit.old_text
+  if not old_text then
+    if text ~= "" then return nil, ("%s already exists"):format(edit.path) end
+    return table.concat(created_lines(edit), "\n")
+  end
+
+  local count, from, at = 0, 1, nil
+  -- LuaJIT's `find()` matches an empty text at the end of the string even
+  -- when it starts past it.
+  while from <= #text + 1 do
+    local found = text:find(old_text, from, true)
+    if not found then break end
+    count = count + 1
+    at = at or found
+    from = found + math.max(#old_text, 1)
+  end
+  if count == 0 then
+    return nil,
+      ("The text an edit replaces isn't in %s anymore"):format(edit.path)
+  elseif count > 1 then
+    return nil,
+      ("The text an edit replaces occurs %d times in %s"):format(
+        count,
+        edit.path
+      )
+  end
+  ---@cast at integer
+  return text:sub(1, at - 1) .. edit.new_text .. text:sub(at + #old_text)
+end
+
 --- Returns the lines with the edits applied one after the other, or why one
 --- of them can't be.
 ---@param lines string[]
@@ -48,26 +93,9 @@ end
 M.apply_edits = function(lines, edits)
   local text = table.concat(lines, "\n")
   for _, edit in ipairs(edits) do
-    local count, from, at = 0, 1, nil
-    while true do
-      local found = text:find(edit.old_text, from, true)
-      if not found then break end
-      count = count + 1
-      at = at or found
-      from = found + math.max(#edit.old_text, 1)
-    end
-    if count == 0 then
-      return nil,
-        ("The text an edit replaces isn't in %s anymore"):format(edit.path)
-    elseif count > 1 then
-      return nil,
-        ("The text an edit replaces occurs %d times in %s"):format(
-          count,
-          edit.path
-        )
-    end
-    ---@cast at integer
-    text = text:sub(1, at - 1) .. edit.new_text .. text:sub(at + #edit.old_text)
+    local edited, err = apply_edit(text, edit)
+    if not edited then return nil, err end
+    text = edited
   end
   return vim.split(text, "\n", { plain = true })
 end
@@ -79,6 +107,7 @@ local ok_view, view = pcall(require, "nvim_hunks.view")
 --- The diff of one of the edits a comment suggests.
 ---@class nvim_threads.EditDiff
 ---@field index integer The edit's index in the comment's edits.
+---@field creates boolean Whether the edit creates its file.
 --- Whether the edit is still to apply, was applied or rejected, or matches
 --- neither the file nor the file with it applied, in which case its lines
 --- aren't numbered.
@@ -121,7 +150,10 @@ end
 local edit_diff = function(path, lines, edit, index, resolution)
   ---@type string[]?, string[]?
   local old, new
-  if resolution == "applied" then
+  if not edit.old_text and resolution == "applied" then
+    -- An applied edit that created the file added all of its lines.
+    old, new = {}, created_lines(edit)
+  elseif resolution == "applied" then
     old = M.apply_edits(lines, {
       { path = path, old_text = edit.new_text, new_text = edit.old_text },
     })
@@ -130,10 +162,12 @@ local edit_diff = function(path, lines, edit, index, resolution)
     new = M.apply_edits(lines, { edit })
     old = new and lines
   end
-  local line = line_of_text(
-    lines,
-    resolution == "applied" and edit.new_text or edit.old_text
-  )
+  local line = edit.old_text
+      and line_of_text(
+        lines,
+        resolution == "applied" and edit.new_text or edit.old_text
+      )
+    or 1
 
   if not old or not new then
     -- The edit alone, without the file's lines or numbers.
@@ -143,7 +177,10 @@ local edit_diff = function(path, lines, edit, index, resolution)
       for _, hunk in
         ipairs(
           view.hunks(
-            expand_tabs(vim.split(edit.old_text, "\n", { plain = true })),
+            expand_tabs(
+              edit.old_text and vim.split(edit.old_text, "\n", { plain = true })
+                or {}
+            ),
             expand_tabs(vim.split(edit.new_text, "\n", { plain = true }))
           )
         )
@@ -157,6 +194,7 @@ local edit_diff = function(path, lines, edit, index, resolution)
     end
     return {
       index = index,
+      creates = edit.old_text == nil,
       state = resolution or "outdated",
       line = line,
       hunks = hunks,
@@ -166,6 +204,7 @@ local edit_diff = function(path, lines, edit, index, resolution)
   old, new = expand_tabs(old), expand_tabs(new)
   return {
     index = index,
+    creates = edit.old_text == nil,
     state = resolution or "pending",
     line = line,
     hunks = ok_view and view.hunks(old, new) or {},
@@ -348,6 +387,7 @@ M.write = function(path, lines)
 
   replace_lines(target, lines)
   if not was_modified then
+    vim.fn.mkdir(vim.fs.dirname(path), "p")
     vim.api.nvim_buf_call(target, function() vim.cmd("silent write") end)
   end
   return target, first_changed

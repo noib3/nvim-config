@@ -593,16 +593,25 @@ local diff_rows = function(diff, view, width, prefix, comment)
     if expanded == nil then expanded = not resolved end
     do
       ---@type table<string, string>
-      local texts = {
-        pending = "Edit",
-        applied = "Applied edit",
-        rejected = "Rejected edit",
-        outdated = "Outdated edit",
-      }
-      local text = texts[edit.state] or "Edit"
-      if edit.line then text = text .. (" at line %d"):format(edit.line) end
-      if edit.state == "outdated" then
-        text = text .. ", whose text isn't in the file anymore"
+      local texts = edit.creates
+          and {
+            pending = "New file",
+            applied = "Created file",
+            rejected = "Rejected new file",
+            outdated = "New file, which already exists",
+          }
+        or {
+          pending = "Edit",
+          applied = "Applied edit",
+          rejected = "Rejected edit",
+          outdated = "Outdated edit",
+        }
+      local text = texts[edit.state] or texts.pending
+      if not edit.creates then
+        if edit.line then text = text .. (" at line %d"):format(edit.line) end
+        if edit.state == "outdated" then
+          text = text .. ", whose text isn't in the file anymore"
+        end
       end
       add({
         { expanded and "▾ " or "▸ ", "ThreadsChevron" },

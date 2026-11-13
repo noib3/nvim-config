@@ -27,7 +27,7 @@ local allowed_kinds = { read = true, search = true, fetch = true, think = true }
 
 ---@class nvim_agents.Edit
 ---@field path string The edited file's absolute path.
----@field old_text string The text replaced.
+---@field old_text? string The text replaced, or nothing if the edit creates the file.
 ---@field new_text string
 
 ---@class nvim_agents.Result
@@ -114,12 +114,11 @@ local edits_of = function(call, cwd)
   local edits = {}
   for _, item in ipairs(call.content or {}) do
     if item.type == "diff" and type(item.path) == "string" then
-      local path = absolute(item.path)
-      local old_text = item.oldText or read_file(path)
-      if old_text and type(item.newText) == "string" then
+      -- A diff without old text creates the file.
+      if type(item.newText) == "string" then
         edits[#edits + 1] = {
-          path = path,
-          old_text = old_text,
+          path = absolute(item.path),
+          old_text = item.oldText,
           new_text = item.newText,
         }
       end
@@ -129,10 +128,13 @@ local edits_of = function(call, cwd)
   local path = input.path or input.file_path
   local old_text = input.old_text or input.old_string
   local new_text = input.new_text or input.new_string
+  -- A write's content is the text of the file it creates.
+  local is_write = not old_text and not new_text
+  if is_write then new_text = input.content end
   if
     #edits == 0
     and type(path) == "string"
-    and type(old_text) == "string"
+    and (is_write or type(old_text) == "string")
     and type(new_text) == "string"
   then
     edits[1] = {

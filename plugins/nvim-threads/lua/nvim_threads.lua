@@ -653,6 +653,11 @@ local draw = function(bufnr, thread, full_float)
 
   local win = float.of_thread(thread.id)
   if win and vim.api.nvim_win_is_valid(win) then
+    -- The float follows the virtual lines when edits above move them.
+    local shown = assert(float.get(win))
+    if shown.source_buf == bufnr and mark.display_row then
+      shown.row = mark.display_row
+    end
     fill(win, rows, full_float == true)
     float.place(win, #rows)
   end

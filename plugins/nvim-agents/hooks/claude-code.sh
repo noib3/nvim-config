@@ -71,7 +71,13 @@ fi
 
 if [ -n "${NVIM_AGENTS_SUGGEST:-}" ]; then
   if [ "$event" = PreToolUse ]; then
-    deny "This session only suggests edits: the edit was recorded as a suggestion for the user to review, and wasn't applied. Don't retry it."
+    path=$(jq -r '.tool_input.file_path // ""' <<<"$input")
+    # A suggested write only creates a file.
+    if [ "$tool" = Write ] && [ -n "$path" ] && [ -e "$path" ]; then
+      deny "The file exists: suggest changes to it with Edit."
+    else
+      deny "This session only suggests edits: the edit was recorded as a suggestion for the user to review, and wasn't applied. Don't retry it."
+    fi
   fi
   exit 0
 fi

@@ -44,10 +44,16 @@ local context = 3
 ---@param new string[]
 ---@return nvim_hunks.view.LineHunk[]
 local line_hunks = function(old, new)
+  if #old == 0 and #new == 0 then return {} end
+  -- The diffs below take an empty side for a single empty line.
+  if #old == 0 then
+    return { { old_start = 0, old_count = 0, new_start = 1, new_count = #new } }
+  elseif #new == 0 then
+    return { { old_start = 1, old_count = #old, new_start = 0, new_count = 0 } }
+  end
   if diff.is_loaded() then
     return diff.compute(old, new) --[[@as nvim_hunks.view.LineHunk[] ]]
   end
-  if #old == 0 and #new == 0 then return {} end
   ---@diagnostic disable-next-line: deprecated
   local text_diff = vim.text.diff or vim.diff
   local indices = text_diff(

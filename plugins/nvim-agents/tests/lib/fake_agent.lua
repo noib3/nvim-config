@@ -132,6 +132,35 @@ local prompt = function(id, session, text)
     })
     chunk(session, "denied")
     write({ id = id, result = { stopReason = "end_turn" } })
+  elseif text == "write" then
+    -- The adapter reports a write as a diff without old text, which the
+    -- update of the denied call replaces with the hook's reason.
+    update(session, {
+      sessionUpdate = "tool_call",
+      toolCallId = "write-1",
+      title = "Write /repo/b.txt",
+      kind = "edit",
+      status = "pending",
+      content = {
+        {
+          type = "diff",
+          path = "/repo/b.txt",
+          oldText = vim.NIL,
+          newText = "new\n",
+        },
+      },
+      rawInput = { file_path = "/repo/b.txt", content = "new\n" },
+    })
+    update(session, {
+      sessionUpdate = "tool_call_update",
+      toolCallId = "write-1",
+      status = "failed",
+      content = {
+        { type = "content", content = { type = "text", text = "denied" } },
+      },
+    })
+    chunk(session, "denied")
+    write({ id = id, result = { stopReason = "end_turn" } })
   elseif text == "read" then
     ask(session, id, {
       toolCallId = "read-1",
