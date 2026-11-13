@@ -297,8 +297,8 @@ vim.api.nvim_create_autocmd("WinClosed", {
   group = group,
   desc = "Forgets the floats of threads closed by window commands",
   callback = function(ev)
-    local win = tonumber(ev.match)
-    local float = win and floats[win]
+    local win = tonumber(ev.match) --[[@as integer]]
+    local float = floats[win]
     if not float then return end
     floats[win] = nil
     fire_closed(float, true)
